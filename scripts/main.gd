@@ -23,7 +23,7 @@ const MAX_COMBO := 5
 const SCREEN := Vector2(1280, 720)
 const CARD_W := 190.0                            # keep in sync with ConceptCard.CARD_W
 const LANE_PITCH := 210.0                        # horizontal distance between lane centers
-const PLAY_TOP := 60.0
+const PLAY_TOP := 16.0
 const BASE_Y := 700.0                            # bottom edge where cards rest
 const WELL_LEFT := 208.0
 const WELL_RIGHT := 1072.0
@@ -58,7 +58,7 @@ var concepts_completed := 0
 var current_fall_speed := FALL_SPEED_START
 
 var last_pair_key := ""
-var last_pair_count := 0
+var _bag: Array = []                # shuffle bag of pair keys
 var _skip_lane_next_spawn := -1     # lane just refilled; its concept is skipped for one spawn
 
 # ----- nodes -----
@@ -547,8 +547,10 @@ func _build_overlays() -> void:
 	var start_btn := _make_button("START", start_round, true)
 	var howto_btn := _make_button("HOW TO PLAY", _show_howto, false)
 	var hs_btn := _make_button("HIGH SCORES", _show_highscores, false)
-	var exit_btn := _make_button("EXIT", _exit_game, false)
-	for btn in [start_btn, howto_btn, hs_btn, exit_btn]:
+	var menu_btns := [start_btn, howto_btn, hs_btn]
+	if not OS.has_feature("web"):   # EXIT is meaningless in a browser
+		menu_btns.append(_make_button("EXIT", _exit_game, false))
+	for btn in menu_btns:
 		var row := CenterContainer.new()
 		row.add_child(btn)
 		s.vb.add_child(row)
@@ -665,8 +667,10 @@ func _build_overlays() -> void:
 	var pause_resume := _make_button("RESUME", _toggle_pause)
 	var pause_review := _make_button("CONCEPTS PLAYED", _show_review, false)
 	var pause_menu := _make_button("MAIN MENU", _show_menu, false)
-	var pause_exit := _make_button("EXIT", _exit_game, false)
-	for btn in [pause_resume, pause_review, pause_menu, pause_exit]:
+	var pause_btns := [pause_resume, pause_review, pause_menu]
+	if not OS.has_feature("web"):
+		pause_btns.append(_make_button("EXIT", _exit_game, false))
+	for btn in pause_btns:
 		var row := CenterContainer.new()
 		row.add_child(btn)
 		p.vb.add_child(row)
@@ -876,7 +880,6 @@ func _hier_legend_text() -> String:
 	var cats := [
 		["finding", "Clinical finding"],
 		["procedure", "Procedure"],
-		["specimen", "Specimen"],
 		["product", "Product"],
 		["situation", "Situation"],
 		["substance", "Substance"],
@@ -1038,7 +1041,7 @@ func start_round() -> void:
 	concepts_completed = 0
 	current_fall_speed = FALL_SPEED_START
 	last_pair_key = ""
-	last_pair_count = 0
+	_bag.clear()
 	_skip_lane_next_spawn = -1
 	input_locked = false
 
@@ -1165,53 +1168,70 @@ func end_game() -> void:
 		elif _default_focus.has(gameover_panel):
 			(_default_focus[gameover_panel] as Button).grab_focus()
 
-# ----- piece spawning -----
-func _unresolved_pool(exclude_lane: int = -1) -> Array:
-	var pool: Array = []
+# ----- piece spawning (shuffle-bag over distinct unresolved pairs) -----
+# Every distinct unresolved pair is drawn once before any repeats, so pieces
+# spread across concepts instead of clustering on one.
+func _pool_map() -> Dictionary:
+	# key "attr|value" -> {attribute, value, lanes: Array[int]}
+	var m := {}
 	for i in active_concepts.size():
-		if i == exclude_lane:
-			continue
 		var c = active_concepts[i]
 		if c == null:
 			continue
 		for r in c.relationships:
-			if not r.completed:
-				pool.append({"attribute": r.attribute, "value": r.value})
-	return pool
+			if r.completed:
+				continue
+			var k := "%s|%s" % [r.attribute, r.value]
+			if not m.has(k):
+				m[k] = {"attribute": r.attribute, "value": r.value, "lanes": []}
+			m[k]["lanes"].append(i)
+	return m
 
-func _pair_key(p: Dictionary) -> String:
-	return "%s|%s" % [p.attribute, p.value]
-
-# Pick a pair, avoiding the same exact pair >2 times in a row when alternatives exist.
-func _pick_pair(pool: Array) -> Dictionary:
-	var distinct := {}
-	for p in pool:
-		distinct[_pair_key(p)] = true
-	var choice: Dictionary = pool[randi() % pool.size()]
-	if distinct.size() > 1 and _pair_key(choice) == last_pair_key and last_pair_count >= 2:
-		var attempts := 0
-		while _pair_key(choice) == last_pair_key and attempts < 16:
-			choice = pool[randi() % pool.size()]
-			attempts += 1
-	if _pair_key(choice) == last_pair_key:
-		last_pair_count += 1
-	else:
-		last_pair_key = _pair_key(choice)
-		last_pair_count = 1
-	return choice
+func _refill_bag(keys: Array) -> void:
+	_bag = keys.duplicate()
+	_bag.shuffle()
+	# avoid repeating the just-played pair across the bag boundary
+	if _bag.size() > 1 and _bag[_bag.size() - 1] == last_pair_key:
+		var tmp = _bag[0]
+		_bag[0] = _bag[_bag.size() - 1]
+		_bag[_bag.size() - 1] = tmp
 
 func spawn_next_piece() -> void:
-	# Skip the just-refilled lane's concept for one spawn, so the player has
-	# time to read the new concept before a piece for it appears.
-	var pool := _unresolved_pool(_skip_lane_next_spawn)
-	_skip_lane_next_spawn = -1
-	if pool.is_empty():
-		pool = _unresolved_pool()
+	var pool := _pool_map()
 	if pool.is_empty():
 		return   # infinite mode keeps lanes full; this should not happen
-	var pair := _pick_pair(pool)
+	var skip := _skip_lane_next_spawn   # don't force the just-shown concept
+	_skip_lane_next_spawn = -1
+
+	var chosen := ""
+	var deferred: Array = []
+	var guard := 0
+	while guard < 128:
+		guard += 1
+		if _bag.is_empty():
+			_refill_bag(pool.keys())
+			if _bag.is_empty():
+				break
+		var k = _bag.pop_back()
+		if not pool.has(k):
+			continue   # stale: completed, or its concept was replaced
+		var lanes: Array = pool[k]["lanes"]
+		if skip >= 0 and lanes.size() == 1 and lanes[0] == skip:
+			deferred.append(k)
+			continue
+		chosen = k
+		break
+	# keep deferred pairs in the cycle for later spawns
+	for d in deferred:
+		if not _bag.has(d):
+			_bag.append(d)
+	if chosen == "":
+		chosen = pool.keys()[randi() % pool.size()]   # fallback
+
+	last_pair_key = chosen
+	var pair = pool[chosen]
 	var piece := RelationshipPiece.new()
-	piece.setup(pair.attribute, pair.value)
+	piece.setup(pair["attribute"], pair["value"])
 	piece.lane_index = 1
 	piece_layer.add_child(piece)
 	piece.position = Vector2(_lane_center_x(1) - PIECE_W / 2.0, PIECE_START_Y)
