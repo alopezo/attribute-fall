@@ -80,6 +80,8 @@ var start_panel: Control
 var howto_panel: Control
 var pause_panel: Control
 var gameover_panel: Control
+var go_title: Label
+var go_reveal: VBoxContainer
 var victory_panel: Control
 var go_stats_label: Label
 var vic_stats_label: Label
@@ -116,8 +118,67 @@ func _setup_fonts() -> void:
 	sfx = Sfx.new()
 	add_child(sfx)
 	_build_logo()
+	_build_crt()
 	_show_only(start_panel)
 	state = State.START
+
+# Full-screen CRT/glitch overlay (Route A: reads the backbuffer via screen_texture).
+# Subtle, sporadic bursts; menus only (hidden during play).
+var _crt: ColorRect
+var _crt_mat: ShaderMaterial
+var _crt_cooldown := 1.0
+var _crt_was_menu := false
+var _crt_error := false     # true during a wrong-drop glitch burst (shown even in-game)
+func _build_crt() -> void:
+	var sh = load("res://assets/crt_glitch.gdshader")
+	if sh == null:
+		return
+	_crt_mat = ShaderMaterial.new()
+	_crt_mat.shader = sh
+	_crt_mat.set_shader_parameter("intensity", 0.0)
+	_crt = ColorRect.new()
+	_crt.material = _crt_mat
+	_crt.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_crt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_crt)
+
+func _set_crt(v: float) -> void:
+	_crt_mat.set_shader_parameter("intensity", v)
+
+func _crt_tick(delta: float) -> void:
+	if _crt == null:
+		return
+	var in_menu := state != State.PLAYING
+	_crt.visible = in_menu or _crt_error   # error bursts show even during play
+	if in_menu and not _crt_was_menu:
+		_crt_cooldown = randf_range(0.3, 0.8)   # kick in promptly when a menu appears (e.g. game over)
+	_crt_was_menu = in_menu
+	if not in_menu:
+		return
+	_crt_cooldown -= delta
+	if _crt_cooldown <= 0.0:
+		_crt_cooldown = randf_range(1.0, 2.6)
+		_crt_burst()
+
+func _crt_burst() -> void:
+	var peak := randf_range(0.22, 0.42)   # subtle
+	var t := create_tween()
+	t.tween_method(_set_crt, 0.0, peak, 0.04)
+	t.tween_method(_set_crt, peak, peak * 0.35, 0.08)
+	t.tween_method(_set_crt, peak * 0.35, peak * 0.75, 0.05)
+	t.tween_method(_set_crt, peak * 0.75, 0.0, 0.14)
+
+# Sharp glitch on a wrong drop; shown even mid-game.
+func _crt_error_burst() -> void:
+	if _crt == null:
+		return
+	_crt_error = true
+	_crt.visible = true
+	var t := create_tween()
+	t.tween_method(_set_crt, 0.65, 0.25, 0.06)
+	t.tween_method(_set_crt, 0.25, 0.5, 0.05)
+	t.tween_method(_set_crt, 0.5, 0.0, 0.2)
+	t.tween_callback(func(): _crt_error = false)
 
 # SNOMED International badge, pinned bottom-right, above everything.
 func _build_logo() -> void:
@@ -511,26 +572,68 @@ func _build_overlays() -> void:
 	# How to play (with subtle falling background)
 	var h := _make_overlay(true)
 	howto_panel = h.root
-	_add_centered_label(h.vb, "HOW TO PLAY", 44, Palette.ACCENT)
-	var body := _make_label(_howto_text(), 18, Palette.TEXT)
-	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	body.custom_minimum_size = Vector2(760, 0)
-	h.vb.add_child(body)
+	_add_centered_label(h.vb, "HOW TO PLAY", 40, Palette.ACCENT)
 
+	# Visual demo: a falling relationship -> the concept it defines.
+	var demo := HBoxContainer.new()
+	demo.add_theme_constant_override("separation", 18)
+	demo.alignment = BoxContainer.ALIGNMENT_CENTER
+	demo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	demo.add_child(_demo_piece("Finding site", "Lung structure"))
+	var arrow := _make_label("→", 40, Palette.MUTED)
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	demo.add_child(arrow)
+	demo.add_child(_demo_card("Pneumonia"))
+	var demo_row := CenterContainer.new()
+	demo_row.add_child(demo)
+	h.vb.add_child(demo_row)
+
+	_add_centered_label(h.vb, "Move the falling relationship onto the concept it defines, and drop it.", 15, Palette.MUTED)
+
+	# Short rules with colored dots.
+	var rules := RichTextLabel.new()
+	rules.bbcode_enabled = true
+	rules.fit_content = true
+	rules.scroll_active = false
+	rules.focus_mode = Control.FOCUS_NONE
+	rules.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rules.custom_minimum_size = Vector2(700, 0)
+	rules.add_theme_font_size_override("normal_font_size", 16)
+	var acc := Palette.ACCENT.to_html(false)
+	var bad := Palette.INCORRECT.to_html(false)
+	rules.text = "\n".join([
+		"[color=#%s]●[/color]  Fill a concept to clear it — a new one takes its place. Endless mode." % acc,
+		"[color=#%s]●[/color]  A relationship can fit more than one concept — any valid card counts." % acc,
+		"[color=#%s]●[/color]  Wrong drop costs a life (you have 3). Chain correct drops for combo ×5." % bad,
+	])
+	h.vb.add_child(rules)
+
+	# Controls as keycaps.
+	var cbox := VBoxContainer.new()
+	cbox.add_theme_constant_override("separation", 6)
+	cbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cbox.add_child(_control_row("Move", ["←", "→", "/", "A", "D", "/", "J", "L"]))
+	cbox.add_child(_control_row("Soft / hard drop", ["↓", "S", "·", "Space"]))
+	cbox.add_child(_control_row("Pause", ["Esc"]))
+	var extra := _make_label("Gamepad: D-pad / stick move · A drop · Start pause        Mouse / touch: click a card", 13, Palette.MUTED)
+	extra.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cbox.add_child(extra)
+	var crow := CenterContainer.new()
+	crow.add_child(cbox)
+	h.vb.add_child(crow)
+
+	# Hierarchy color legend (swatches).
 	var legend := RichTextLabel.new()
 	legend.bbcode_enabled = true
 	legend.fit_content = true
 	legend.scroll_active = false
 	legend.focus_mode = Control.FOCUS_NONE
 	legend.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	legend.custom_minimum_size = Vector2(760, 0)
-	legend.add_theme_font_size_override("normal_font_size", 16)
+	legend.custom_minimum_size = Vector2(700, 0)
+	legend.add_theme_font_size_override("normal_font_size", 15)
 	legend.text = _hier_legend_text()
 	h.vb.add_child(legend)
 
-	var hspacer := Control.new()
-	hspacer.custom_minimum_size = Vector2(0, 10)
-	h.vb.add_child(hspacer)
 	var back_btn := _make_button("BACK", _show_menu, true)
 	var hrow := CenterContainer.new()
 	hrow.add_child(back_btn)
@@ -551,23 +654,28 @@ func _build_overlays() -> void:
 		p.vb.add_child(row)
 	_default_focus[pause_panel] = pause_resume
 
-	# Game over
+	# Game over — title first, then a reveal group (stats + buttons) that appears
+	# after a beat and pushes the title up (also covers the anti-reflex lockout).
 	var g := _make_overlay()
 	gameover_panel = g.root
-	_add_centered_label(g.vb, "GAME OVER", 48, Palette.INCORRECT)
-	go_stats_label = _add_centered_label(g.vb, "", 22, Palette.TEXT)
+	go_title = _add_centered_label(g.vb, "GAME OVER", 48, Palette.INCORRECT)
+	go_reveal = VBoxContainer.new()
+	go_reveal.alignment = BoxContainer.ALIGNMENT_CENTER
+	go_reveal.add_theme_constant_override("separation", 14)
+	g.vb.add_child(go_reveal)
+	go_stats_label = _add_centered_label(go_reveal, "", 22, Palette.TEXT)
 	var go_btn := _make_button("TRY AGAIN", restart_round, true)
 	var grow := CenterContainer.new()
 	grow.add_child(go_btn)
-	g.vb.add_child(grow)
+	go_reveal.add_child(grow)
 	var go_review := _make_button("CONCEPTS PLAYED", _show_review, false)
 	var grow_r := CenterContainer.new()
 	grow_r.add_child(go_review)
-	g.vb.add_child(grow_r)
+	go_reveal.add_child(grow_r)
 	var go_menu := _make_button("MAIN MENU", _show_menu, false)
 	var grow2 := CenterContainer.new()
 	grow2.add_child(go_menu)
-	g.vb.add_child(grow2)
+	go_reveal.add_child(grow2)
 	_default_focus[gameover_panel] = go_btn
 	_go_buttons = [go_btn, go_review, go_menu]
 
@@ -606,28 +714,96 @@ func _build_overlays() -> void:
 	v.vb.add_child(vrow2)
 	_default_focus[victory_panel] = vic_btn
 
-func _howto_text() -> String:
-	return "\n".join([
-		"Each falling block is a SNOMED relationship: an attribute and its",
-		"value, e.g.  FINDING SITE → Lung structure.",
-		"",
-		"The 4 cards at the base are concepts. Their relationships are hidden;",
-		"each correct drop is revealed and the card grows upward.",
-		"",
-		"•  Move the block over the concept the relationship belongs to and drop it.",
-		"•  A relationship can fit more than one concept — any valid card counts.",
-		"•  As you fill a concept its card grows, so each new relationship on it",
-		"   lands sooner than the last — less time as the concept nears completion.",
-		"•  Complete every relationship of a concept to clear it; it is then replaced",
-		"   by a fresh concept in that lane. Endless mode — keep clearing concepts.",
-		"•  A wrong drop costs a life (you have 3). Consecutive hits build a combo (up to x5).",
-		"•  Overall falling speed rises the more concepts you clear.",
-		"",
-		"Keyboard:   ← →  /  A D  /  J L  move      ↓ or S  soft drop",
-		"            SPACE  hard drop        ESC  pause",
-		"Gamepad:    D-pad / left stick  move      A  hard drop      Start  pause",
-		"Mouse / touch:   click a concept card to drop the piece there",
-	])
+# ----- How-to-play visual helpers -----
+func _keycap(txt: String) -> Control:
+	var p := PanelContainer.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(1, 1, 1, 0.06)
+	st.set_border_width_all(1)
+	st.border_color = Palette.CARD_BORDER
+	st.set_corner_radius_all(6)
+	st.content_margin_left = 9
+	st.content_margin_right = 9
+	st.content_margin_top = 3
+	st.content_margin_bottom = 3
+	p.add_theme_stylebox_override("panel", st)
+	var l := _make_label(txt, 14, Palette.TEXT)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(l)
+	return p
+
+func _control_row(caption: String, items: Array) -> HBoxContainer:
+	var h := HBoxContainer.new()
+	h.add_theme_constant_override("separation", 6)
+	h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var c := _make_label(caption, 14, Palette.MUTED)
+	c.custom_minimum_size = Vector2(150, 0)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	h.add_child(c)
+	for it in items:
+		if it == "/" or it == "·":
+			var sep := _make_label(it, 14, Palette.MUTED)
+			sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			h.add_child(sep)
+		else:
+			h.add_child(_keycap(it))
+	return h
+
+func _demo_piece(attr: String, val: String) -> Control:
+	var p := PanelContainer.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.custom_minimum_size = Vector2(150, 0)
+	var st := StyleBoxFlat.new()
+	st.bg_color = Palette.PIECE_BG
+	st.set_border_width_all(2)
+	st.border_color = Palette.ACCENT
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 12
+	st.content_margin_right = 12
+	st.content_margin_top = 8
+	st.content_margin_bottom = 8
+	p.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_theme_constant_override("separation", 2)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(vb)
+	var a := _make_label(attr.to_upper(), 11, Palette.attr_color(attr))
+	a.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	a.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(a)
+	var v := _make_label(val, 15, Palette.TEXT)
+	v.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(v)
+	return p
+
+func _demo_card(cname: String) -> Control:
+	var p := PanelContainer.new()
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.custom_minimum_size = Vector2(180, 0)
+	var st := StyleBoxFlat.new()
+	st.bg_color = Palette.CARD_BG
+	st.set_border_width_all(2)
+	st.border_color = Palette.hier_color("finding")
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 12
+	st.content_margin_right = 12
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	p.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 5)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.add_child(vb)
+	var n := _make_label(cname, 15, Palette.TEXT)
+	n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(n)
+	var row := _make_label("✓ Finding site → Lung structure", 12, Palette.attr_color("Finding site"))
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(row)
+	return p
 
 func _hier_legend_text() -> String:
 	var cats := [
@@ -773,14 +949,36 @@ func end_game() -> void:
 	current_piece = null
 	sfx.sfx_game_over()
 	go_stats_label.text = "Concepts completed: %d\nScore: %d\nBest combo: x%d" % [concepts_completed, score, maxi(best_combo, 1)]
-	# Brief lockout so reflex taps on game controls don't immediately restart/close.
+
+	# Lock input while the sequence plays (also stops reflex taps from restarting).
 	_input_guard = true
 	for b in _go_buttons:
 		b.disabled = true
-	_show_only(gameover_panel)
-	get_tree().create_timer(2.0).timeout.connect(_end_game_over_guard)
 
-func _end_game_over_guard() -> void:
+	# Phase A: only "GAME OVER", centered, with a pop.
+	go_reveal.visible = false
+	go_title.modulate.a = 0.0
+	_show_only(gameover_panel)
+	await get_tree().process_frame   # let layout compute the title size
+	go_title.pivot_offset = go_title.size / 2.0
+	go_title.scale = Vector2(0.6, 0.6)
+	var t := create_tween()
+	t.set_parallel(true)
+	t.tween_property(go_title, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.tween_property(go_title, "modulate:a", 1.0, 0.25)
+	await _delay(1.1)
+
+	if state != State.GAMEOVER:
+		return   # player left somehow
+
+	# Phase B: reveal the menu (container recenters -> title moves up), fade it in.
+	go_reveal.modulate.a = 0.0
+	go_reveal.visible = true
+	var t2 := create_tween()
+	t2.tween_property(go_reveal, "modulate:a", 1.0, 0.3)
+	await _delay(0.35)
+
+	# Phase C: enable interaction.
 	_input_guard = false
 	for b in _go_buttons:
 		b.disabled = false
@@ -842,6 +1040,7 @@ func spawn_next_piece() -> void:
 
 # ----- input & falling -----
 func _process(delta: float) -> void:
+	_crt_tick(delta)
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
 	var speed := current_fall_speed
@@ -979,6 +1178,7 @@ func resolve_drop(lane: int) -> void:
 		lane_cards[lane].flash_wrong()
 		_show_message("Not part of this concept", Palette.INCORRECT)
 		_highlight_valid_targets(piece)
+		_crt_error_burst()
 		sfx.sfx_wrong()
 		piece.animate_fail()
 		if lives <= 0:
