@@ -12,6 +12,7 @@ const ConceptCard = preload("res://scripts/concept_card.gd")
 const RelationshipPiece = preload("res://scripts/relationship_piece.gd")
 const Sfx = preload("res://scripts/sfx.gd")
 const BgFall = preload("res://scripts/bg_fall.gd")
+const Scores = preload("res://scripts/scores.gd")
 
 # ----- constants -----
 const LANE_COUNT := 4
@@ -35,7 +36,7 @@ const FALL_SPEED_SOFT := 300.0
 const FALL_SPEED_STEP := 11.0
 const FALL_SPEED_MAX := 190.0
 
-enum State { START, HOWTO, PLAYING, PAUSED, GAMEOVER, VICTORY, REVIEW }
+enum State { START, HOWTO, PLAYING, PAUSED, GAMEOVER, VICTORY, REVIEW, HIGHSCORES }
 
 # ----- game state -----
 var state: int = State.START
@@ -75,6 +76,18 @@ var _cd_tween: Tween
 var review_panel: Control
 var review_rtl: RichTextLabel
 var _review_from: int = State.GAMEOVER   # where CONCEPTS PLAYED was opened from
+
+var scores: Scores
+var highscores_panel: Control
+var hs_list: VBoxContainer
+var hs_status: Label
+var _hs_from: int = State.START
+var _scores_ctx := "view"                # "view" or "gameover"
+var _go_scores_done := false
+var _go_entries: Array = []
+var go_name_group: VBoxContainer
+var go_name_edit: LineEdit
+var go_submit_btn: Button
 
 var start_panel: Control
 var howto_panel: Control
@@ -117,6 +130,10 @@ func _setup_fonts() -> void:
 	_build_overlays()
 	sfx = Sfx.new()
 	add_child(sfx)
+	scores = Scores.new()
+	add_child(scores)
+	scores.loaded.connect(_on_scores_loaded)
+	scores.submitted.connect(_on_score_submitted)
 	_build_logo()
 	_build_crt()
 	_show_only(start_panel)
@@ -529,8 +546,9 @@ func _build_overlays() -> void:
 	s.vb.add_child(spacer)
 	var start_btn := _make_button("START", start_round, true)
 	var howto_btn := _make_button("HOW TO PLAY", _show_howto, false)
+	var hs_btn := _make_button("HIGH SCORES", _show_highscores, false)
 	var exit_btn := _make_button("EXIT", _exit_game, false)
-	for btn in [start_btn, howto_btn, exit_btn]:
+	for btn in [start_btn, howto_btn, hs_btn, exit_btn]:
 		var row := CenterContainer.new()
 		row.add_child(btn)
 		s.vb.add_child(row)
@@ -664,10 +682,39 @@ func _build_overlays() -> void:
 	go_reveal.add_theme_constant_override("separation", 14)
 	g.vb.add_child(go_reveal)
 	go_stats_label = _add_centered_label(go_reveal, "", 22, Palette.TEXT)
+
+	# Name entry (only shown when the score makes the top 20).
+	go_name_group = VBoxContainer.new()
+	go_name_group.alignment = BoxContainer.ALIGNMENT_CENTER
+	go_name_group.add_theme_constant_override("separation", 8)
+	go_name_group.visible = false
+	go_reveal.add_child(go_name_group)
+	_add_centered_label(go_name_group, "New high score!  Enter your name:", 18, Palette.ACCENT)
+	var name_row := HBoxContainer.new()
+	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	name_row.add_theme_constant_override("separation", 8)
+	go_name_edit = LineEdit.new()
+	go_name_edit.placeholder_text = "Your name"
+	go_name_edit.max_length = 16
+	go_name_edit.custom_minimum_size = Vector2(220, 44)
+	go_name_edit.add_theme_font_size_override("font_size", 18)
+	go_name_edit.text_submitted.connect(func(_t): _on_submit_pressed())
+	name_row.add_child(go_name_edit)
+	go_submit_btn = _make_button("SUBMIT", _on_submit_pressed, true)
+	go_submit_btn.custom_minimum_size = Vector2(150, 44)
+	name_row.add_child(go_submit_btn)
+	var name_center := CenterContainer.new()
+	name_center.add_child(name_row)
+	go_name_group.add_child(name_center)
+
 	var go_btn := _make_button("TRY AGAIN", restart_round, true)
 	var grow := CenterContainer.new()
 	grow.add_child(go_btn)
 	go_reveal.add_child(grow)
+	var go_hs := _make_button("HIGH SCORES", _show_highscores, false)
+	var grow_h := CenterContainer.new()
+	grow_h.add_child(go_hs)
+	go_reveal.add_child(grow_h)
 	var go_review := _make_button("CONCEPTS PLAYED", _show_review, false)
 	var grow_r := CenterContainer.new()
 	grow_r.add_child(go_review)
@@ -677,7 +724,7 @@ func _build_overlays() -> void:
 	grow2.add_child(go_menu)
 	go_reveal.add_child(grow2)
 	_default_focus[gameover_panel] = go_btn
-	_go_buttons = [go_btn, go_review, go_menu]
+	_go_buttons = [go_btn, go_hs, go_review, go_menu]
 
 	# Concepts-played review (scrollable, ids linked to the SNOMED URI)
 	var r := _make_overlay()
@@ -698,6 +745,26 @@ func _build_overlays() -> void:
 	brow.add_child(review_back)
 	r.vb.add_child(brow)
 	_default_focus[review_panel] = review_back
+
+	# High scores (leaderboard from Firestore)
+	var hp := _make_overlay()
+	highscores_panel = hp.root
+	(hp.root.get_child(0) as ColorRect).color = Palette.BG   # opaque
+	_add_centered_label(hp.vb, "HIGH SCORES", 40, Palette.ACCENT)
+	hs_status = _add_centered_label(hp.vb, "", 16, Palette.MUTED)
+	var hs_scroll := ScrollContainer.new()
+	hs_scroll.custom_minimum_size = Vector2(620, 430)
+	hs_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	hs_list = VBoxContainer.new()
+	hs_list.custom_minimum_size = Vector2(620, 0)
+	hs_list.add_theme_constant_override("separation", 4)
+	hs_scroll.add_child(hs_list)
+	hp.vb.add_child(hs_scroll)
+	var hs_back := _make_button("BACK", _close_highscores, true)
+	var hsrow := CenterContainer.new()
+	hsrow.add_child(hs_back)
+	hp.vb.add_child(hsrow)
+	_default_focus[highscores_panel] = hs_back
 
 	# Victory
 	var v := _make_overlay()
@@ -821,7 +888,7 @@ func _hier_legend_text() -> String:
 	return "[color=#9AA7BD]Card border color = concept hierarchy:[/color]\n" + "     ".join(parts)
 
 func _show_only(panel: Control) -> void:
-	for pnl in [start_panel, howto_panel, pause_panel, gameover_panel, victory_panel, review_panel]:
+	for pnl in [start_panel, howto_panel, pause_panel, gameover_panel, victory_panel, review_panel, highscores_panel]:
 		if pnl:
 			pnl.visible = (pnl == panel)
 	if panel != null and not _input_guard and _default_focus.has(panel):
@@ -877,6 +944,90 @@ func _populate_review() -> void:
 
 func _on_review_meta(meta) -> void:
 	OS.shell_open(str(meta))
+
+# ----- high scores (Firestore) -----
+func _show_highscores() -> void:
+	_hs_from = state
+	_scores_ctx = "view"
+	state = State.HIGHSCORES
+	hs_status.text = "Loading…"
+	_clear_children(hs_list)
+	_show_only(highscores_panel)
+	scores.fetch_top()
+
+func _close_highscores() -> void:
+	if _hs_from == State.GAMEOVER:
+		_show_gameover()
+	else:
+		_show_menu()
+
+func _clear_children(n: Node) -> void:
+	for c in n.get_children():
+		c.queue_free()
+
+func _populate_highscores(entries: Array) -> void:
+	_clear_children(hs_list)
+	if entries.is_empty():
+		hs_status.text = "No scores yet — be the first!"
+		return
+	hs_status.text = ""
+	for i in entries.size():
+		var e = entries[i]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var rank := _make_label(str(i + 1), 16, Palette.MUTED)
+		rank.custom_minimum_size = Vector2(38, 0)
+		rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(rank)
+		var nm := _make_label(str(e.name), 16, Palette.TEXT)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nm.clip_text = true
+		row.add_child(nm)
+		var sc := _make_label(str(e.score), 16, Palette.ACCENT)
+		sc.custom_minimum_size = Vector2(80, 0)
+		sc.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(sc)
+		var d := str(e.get("date", ""))
+		if d.length() >= 10:
+			d = d.substr(0, 10)   # YYYY-MM-DD
+		var dl := _make_label(d, 14, Palette.MUTED)
+		dl.custom_minimum_size = Vector2(100, 0)
+		dl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		row.add_child(dl)
+		hs_list.add_child(row)
+
+func _on_scores_loaded(entries: Array) -> void:
+	if _scores_ctx == "gameover":
+		_go_entries = entries
+		_go_scores_done = true
+	elif _scores_ctx == "view" and state == State.HIGHSCORES:
+		_populate_highscores(entries)
+
+func _on_submit_pressed() -> void:
+	if go_submit_btn.disabled:
+		return
+	var nm := go_name_edit.text.strip_edges()
+	if nm == "":
+		nm = "Anon"
+	go_submit_btn.disabled = true
+	go_name_edit.editable = false
+	scores.submit(nm, score)
+
+func _on_score_submitted(ok: bool) -> void:
+	if ok:
+		go_name_group.visible = false   # done — hide the form so it doesn't linger
+		_hs_from = State.GAMEOVER
+		_scores_ctx = "view"
+		state = State.HIGHSCORES
+		hs_status.text = "Loading…"
+		_clear_children(hs_list)
+		_show_only(highscores_panel)
+		scores.fetch_top()
+	else:
+		go_submit_btn.disabled = false
+		go_name_edit.editable = true
+		go_submit_btn.text = "RETRY"
 
 # ----- round lifecycle -----
 func start_round() -> void:
@@ -955,6 +1106,23 @@ func end_game() -> void:
 	for b in _go_buttons:
 		b.disabled = true
 
+	# Reset the (hidden) name-entry group for this run.
+	go_name_group.visible = false
+	go_name_edit.text = ""
+	go_name_edit.editable = true
+	go_submit_btn.disabled = false
+	go_submit_btn.text = "SUBMIT"
+
+	# Start fetching the leaderboard right away so we can decide (form or not)
+	# BEFORE revealing the menu — no layout jump.
+	_go_scores_done = false
+	_go_entries = []
+	if score > 0:
+		_scores_ctx = "gameover"
+		scores.fetch_top()
+	else:
+		_go_scores_done = true
+
 	# Phase A: only "GAME OVER", centered, with a pop.
 	go_reveal.visible = false
 	go_title.modulate.a = 0.0
@@ -966,12 +1134,21 @@ func end_game() -> void:
 	t.set_parallel(true)
 	t.tween_property(go_title, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	t.tween_property(go_title, "modulate:a", 1.0, 0.25)
-	await _delay(1.1)
 
+	# Wait at least 2s (anti-reflex) AND until the scores are in (cap the wait).
+	await _delay(2.0)
+	var waited := 0.0
+	while not _go_scores_done and waited < 4.0:
+		await _delay(0.1)
+		waited += 0.1
 	if state != State.GAMEOVER:
 		return   # player left somehow
 
-	# Phase B: reveal the menu (container recenters -> title moves up), fade it in.
+	# Decide the form BEFORE revealing, so nothing shifts afterwards.
+	var qualifies := score > 0 and Scores.qualifies(score, _go_entries)
+	go_name_group.visible = qualifies
+
+	# Phase B: reveal the menu (title moves up), fade it in.
 	go_reveal.modulate.a = 0.0
 	go_reveal.visible = true
 	var t2 := create_tween()
@@ -982,8 +1159,11 @@ func end_game() -> void:
 	_input_guard = false
 	for b in _go_buttons:
 		b.disabled = false
-	if state == State.GAMEOVER and _default_focus.has(gameover_panel):
-		(_default_focus[gameover_panel] as Button).grab_focus()
+	if state == State.GAMEOVER:
+		if qualifies:
+			go_name_edit.call_deferred("grab_focus")
+		elif _default_focus.has(gameover_panel):
+			(_default_focus[gameover_panel] as Button).grab_focus()
 
 # ----- piece spawning -----
 func _unresolved_pool(exclude_lane: int = -1) -> Array:
@@ -1076,6 +1256,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		State.REVIEW:
 			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
 				_close_review()
+		State.HIGHSCORES:
+			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
+				_close_highscores()
 
 func _toggle_pause() -> void:
 	if state == State.PLAYING:
