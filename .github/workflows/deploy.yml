@@ -1,0 +1,79 @@
+name: Deploy web build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the workflow to publish to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy at a time; newer pushes cancel older runs.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.5.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} + export templates
+        run: |
+          set -e
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          chmod +x "Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mv templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Export Web build
+        run: |
+          set -e
+          GODOT="./Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          # Import resources first (build/ does not exist yet, so nothing stray is imported).
+          $GODOT --headless --path . --import
+          mkdir -p build/web
+          touch build/.gdignore
+          $GODOT --headless --path . --export-release "Web" build/web/index.html
+          # GitHub Pages: skip Jekyll processing.
+          touch build/web/.nojekyll
+          ls -la build/web
+
+      - name: Package zip for itch.io
+        run: |
+          cd build/web
+          zip -q -r ../attribute-fall-web.zip . -x ".nojekyll"
+
+      - name: Upload itch.io zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: attribute-fall-web-zip
+          path: build/attribute-fall-web.zip
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
