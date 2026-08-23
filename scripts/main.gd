@@ -492,6 +492,22 @@ func _build_overlays() -> void:
 	footer.meta_hover_ended.connect(func(_m): footer.mouse_default_cursor_shape = Control.CURSOR_ARROW)
 	start_panel.add_child(footer)
 
+	# "Made with Godot" credit, bottom-left (balances the SNOMED badge bottom-right).
+	var gtex = load("res://assets/godot_icon.svg")
+	if gtex != null:
+		var gicon := TextureRect.new()
+		gicon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		gicon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		gicon.texture = gtex
+		gicon.custom_minimum_size = Vector2(22, 22)
+		gicon.size = Vector2(22, 22)
+		gicon.position = Vector2(24, SCREEN.y - 42)
+		gicon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		start_panel.add_child(gicon)
+		var glabel := _make_label("Made with Godot", 13, Palette.MUTED)
+		glabel.position = Vector2(52, SCREEN.y - 40)
+		start_panel.add_child(glabel)
+
 	# How to play (with subtle falling background)
 	var h := _make_overlay(true)
 	howto_panel = h.root
