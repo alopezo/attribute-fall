@@ -51,6 +51,8 @@ CATEGORY_PRIORITY = [
     "finding", "procedure", "situation", "specimen", "product",
     "substance", "observable", "bodystructure", "organism", "object", "event",
 ]
+# Categories excluded from the game pool.
+EXCLUDE_CATEGORIES = {"specimen"}
 
 # Skip/relabel a few very generic attribute types that read poorly in a game.
 # (Kept minimal on purpose; extend if desired.)
@@ -194,7 +196,10 @@ def main():
             built.append({"attribute": a, "value": v})
         if len(built) < MIN_RELS or len(built) > MAX_RELS:
             continue
-        out.append({"id": cid, "label": clabel, "hier": category_of(cid), "relationships": built})
+        cat = category_of(cid)
+        if cat in EXCLUDE_CATEGORIES:
+            continue
+        out.append({"id": cid, "label": clabel, "hier": cat, "relationships": built})
 
     out.sort(key=lambda c: c["label"].lower())
 
