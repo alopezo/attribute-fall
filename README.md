@@ -1,11 +1,22 @@
 # Attribute Fall
 
+**▶ Play in your browser: https://alopezo.github.io/attribute-fall/**
+
 A small arcade game where **SNOMED CT relationships fall** and you drop each one onto
 the concept it defines. A falling block shows an attribute and its value
 (e.g. `FINDING SITE → Lung structure`); move it over the concept it belongs to and drop.
 Complete every relationship of a concept to clear it — endless mode, three lives.
 
-Built with **Godot 4.5** (GDScript). UI is created in code; there are no heavy scenes.
+Built with **Godot 4.5** (GDScript).
+
+## Assetless by design
+
+All visuals are **generated in code** with Godot's native UI primitives — `Control`
+nodes and `StyleBoxFlat` (rounded rects, borders, glow). There are **no sprites or
+bitmap art**: just a couple of vector logos (SVG), a bundled font for glyph coverage,
+**procedural sound effects** (PCM generated at runtime), and a **screen shader** for the
+CRT/glitch effect. The result is tiny, crisp at any resolution, and fully themeable from
+one palette.
 
 ## Play
 
