@@ -32,20 +32,23 @@ func _build() -> void:
 		return
 	_built = true
 
-	var col := Palette.attr_color(attribute)   # colored by attribute type
+	# Attribute type colors the TEXT only. The frame stays a consistent accent,
+	# so the falling piece never looks like it "matches" a hierarchy-colored card.
+	var col := Palette.attr_color(attribute)
+	var frame := Palette.ACCENT
 	custom_minimum_size = Vector2(PIECE_W, MIN_H)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	_style = StyleBoxFlat.new()
 	_style.bg_color = Palette.PIECE_BG
 	_style.set_border_width_all(2)
-	_style.border_color = col
+	_style.border_color = frame
 	_style.set_corner_radius_all(14)
 	_style.content_margin_left = 14
 	_style.content_margin_right = 14
 	_style.content_margin_top = 8
 	_style.content_margin_bottom = 8
-	_style.shadow_color = Color(col.r, col.g, col.b, 0.35)
+	_style.shadow_color = Color(frame.r, frame.g, frame.b, 0.35)
 	_style.shadow_size = 8
 	add_theme_stylebox_override("panel", _style)
 
