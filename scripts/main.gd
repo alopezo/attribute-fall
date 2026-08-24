@@ -134,6 +134,7 @@ func _setup_fonts() -> void:
 	add_child(scores)
 	scores.loaded.connect(_on_scores_loaded)
 	scores.submitted.connect(_on_score_submitted)
+	_build_music()
 	_build_logo()
 	_build_crt()
 	_show_only(start_panel)
@@ -197,6 +198,27 @@ func _crt_error_burst() -> void:
 	t.tween_method(_set_crt, 0.5, 0.0, 0.2)
 	t.tween_callback(func(): _crt_error = false)
 
+# Looping background music. On web the browser resumes audio on first input.
+var music: AudioStreamPlayer
+var _music_muted := false
+func _build_music() -> void:
+	var stream = load("res://assets/music/1_ascend.ogg")
+	if stream == null:
+		return
+	if "loop" in stream:
+		stream.loop = true
+	music = AudioStreamPlayer.new()
+	music.stream = stream
+	music.volume_db = -12.0
+	add_child(music)
+	music.play()
+
+func _toggle_music() -> void:
+	if music == null:
+		return
+	_music_muted = not _music_muted
+	music.volume_db = -80.0 if _music_muted else -12.0
+
 # SNOMED International badge, pinned bottom-right, above everything.
 func _build_logo() -> void:
 	var tex = load("res://assets/snomed_international.svg")
@@ -223,6 +245,7 @@ func _setup_input() -> void:
 	_add_action("af_soft",  [KEY_DOWN, KEY_S], [JOY_BUTTON_DPAD_DOWN], [[JOY_AXIS_LEFT_Y, 1.0]])
 	_add_action("af_hard",  [KEY_SPACE], [JOY_BUTTON_A], [])
 	_add_action("af_pause", [KEY_ESCAPE], [JOY_BUTTON_START], [])
+	_add_action("af_mute",  [KEY_M], [], [])
 
 func _add_action(name: String, keys: Array, buttons: Array, axes: Array) -> void:
 	if InputMap.has_action(name):
@@ -393,7 +416,7 @@ func _build_side_panel() -> void:
 	vb.add_child(_spacer(8))
 
 	vb.add_child(_make_label("CONTROLS", 10, Palette.MUTED))
-	vb.add_child(_make_label("Move     ← →\nDrop      Space\nPause    Esc", 13, Palette.TEXT))
+	vb.add_child(_make_label("Move     ← →\nDrop      Space\nPause    Esc\nMute      M", 13, Palette.TEXT))
 
 	panel.reset_size()
 
@@ -635,7 +658,7 @@ func _build_overlays() -> void:
 	cbox.add_child(_control_row("Move", ["←", "→", "/", "A", "D", "/", "J", "L"]))
 	cbox.add_child(_control_row("Soft / hard drop", ["↓", "S", "·", "Space"]))
 	cbox.add_child(_control_row("Pause", ["Esc"]))
-	var extra := _make_label("Gamepad: D-pad / stick move · A drop · Start pause        Mouse / touch: click a card", 13, Palette.MUTED)
+	var extra := _make_label("Gamepad: D-pad / stick move · A drop · Start pause        Mouse / touch: click a card        M: mute music", 13, Palette.MUTED)
 	extra.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	cbox.add_child(extra)
 	var crow := CenterContainer.new()
@@ -1253,6 +1276,9 @@ func _process(delta: float) -> void:
 		resolve_drop(current_piece.lane_index)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("af_mute"):
+		_toggle_music()
+		return
 	if _counting or _input_guard:
 		return
 	# Menu-like states rely on focusable buttons (keyboard + gamepad via ui_* actions);
