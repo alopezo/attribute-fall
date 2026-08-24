@@ -54,6 +54,17 @@ CATEGORY_PRIORITY = [
 # Categories excluded from the game pool.
 EXCLUDE_CATEGORIES = {"specimen"}
 
+# Attribute -> value pairs that make a concept play poorly: the repetitive
+# tumour-staging histopathology modelling ("Tumour invasion into X, in situ" and
+# friends). Drop any concept whose modelling contains one of these pairs.
+EXCLUDE_PAIRS = {
+    ("Interprets", "Lesion observable"),
+    ("Interprets", "Histopathology test"),
+    # Vaccine products ("... antigen only vaccine product") — repetitive
+    # "Plays role → Active immunity stimulant role" + "Has active ingredient".
+    ("Plays role", "Active immunity stimulant role"),
+}
+
 # Skip/relabel a few very generic attribute types that read poorly in a game.
 # (Kept minimal on purpose; extend if desired.)
 MIN_RELS = 2
@@ -195,6 +206,8 @@ def main():
             seen.add(key)
             built.append({"attribute": a, "value": v})
         if len(built) < MIN_RELS or len(built) > MAX_RELS:
+            continue
+        if any((r["attribute"], r["value"]) in EXCLUDE_PAIRS for r in built):
             continue
         cat = category_of(cid)
         if cat in EXCLUDE_CATEGORIES:
