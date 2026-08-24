@@ -13,6 +13,7 @@ const RelationshipPiece = preload("res://scripts/relationship_piece.gd")
 const Sfx = preload("res://scripts/sfx.gd")
 const BgFall = preload("res://scripts/bg_fall.gd")
 const Scores = preload("res://scripts/scores.gd")
+const I18n = preload("res://scripts/i18n.gd")
 
 # ----- constants -----
 const LANE_COUNT := 4
@@ -43,7 +44,7 @@ const FALL_SPEED_SOFT := 300.0
 const FALL_SPEED_STEP := 11.0
 const FALL_SPEED_MAX := 190.0
 
-enum State { START, HOWTO, CREDITS, PLAYING, PAUSED, GAMEOVER, VICTORY, REVIEW, HIGHSCORES }
+enum State { START, HOWTO, CREDITS, PLAYING, PAUSED, GAMEOVER, REVIEW, HIGHSCORES }
 
 # ----- game state -----
 var state: int = State.START
@@ -105,12 +106,14 @@ var pause_panel: Control
 var gameover_panel: Control
 var go_title: Label
 var go_reveal: VBoxContainer
-var victory_panel: Control
 var go_stats_label: Label
-var vic_stats_label: Label
 var _default_focus: Dictionary = {}   # panel -> Button to focus when shown
 
 func _ready() -> void:
+	I18n.register()
+	var lang := I18n.load_pref()
+	TranslationServer.set_locale(lang)
+	PrototypeData.set_language(lang)
 	_setup_fonts()
 	_setup_input()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -149,6 +152,7 @@ func _setup_fonts() -> void:
 	_build_version_label()
 	_build_crt()
 	_build_music_toggle()
+	_build_lang_toggle()
 	_show_only(start_panel)
 	state = State.START
 
@@ -348,6 +352,62 @@ func _update_music_icon() -> void:
 	_music_btn.add_theme_color_override("font_hover_color", Palette.TEXT)
 	if _music_slash:
 		_music_slash.visible = _music_muted
+
+# EN/ES language toggle, left of the music note. Shown in menus only (switching
+# mid-game would desync the text-keyed piece bag). The chosen language applies to
+# the concept data on the next round; UI text updates immediately.
+var _lang_btn: Button
+func _build_lang_toggle() -> void:
+	_lang_btn = Button.new()
+	_lang_btn.focus_mode = Control.FOCUS_NONE
+	_lang_btn.add_theme_font_size_override("font_size", 15)
+	_lang_btn.custom_minimum_size = Vector2(40, 40)
+	_lang_btn.size = Vector2(40, 40)
+	_lang_btn.position = Vector2(SCREEN.x - 100.0, 12.0)
+	_lang_btn.tooltip_text = "Language / Idioma"
+	_lang_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	var empty := StyleBoxEmpty.new()
+	for s in ["normal", "hover", "pressed", "focus"]:
+		_lang_btn.add_theme_stylebox_override(s, empty)
+	_lang_btn.add_theme_color_override("font_color", Palette.MUTED)
+	_lang_btn.add_theme_color_override("font_hover_color", Palette.TEXT)
+	_lang_btn.pressed.connect(_toggle_language)
+	add_child(_lang_btn)
+	_update_lang_icon()
+
+func _update_lang_icon() -> void:
+	if _lang_btn:
+		_lang_btn.text = I18n.lang.to_upper()
+
+func _toggle_language() -> void:
+	_set_language("es" if I18n.lang == "en" else "en")
+
+func _set_language(l: String) -> void:
+	if l == I18n.lang:
+		return
+	I18n.save_pref(l)
+	TranslationServer.set_locale(l)
+	PrototypeData.set_language(l)
+	_retranslate()
+	_update_lang_icon()
+
+# Plain Label/Button text auto-translates on locale change; here we refresh the
+# bbcode / custom nodes that don't.
+func _retranslate() -> void:
+	if _links_rtl:
+		_set_links_text()
+	if _footer_rtl:
+		_set_footer_text()
+	if _rules_rtl:
+		_set_rules_text()
+	if _legend_rtl:
+		_legend_rtl.text = _hier_legend_text()
+	if _contact_rtl:
+		_set_contact_text()
+	if _demo_box:
+		_fill_demo()
+	if _music_btn:
+		_music_btn.tooltip_text = tr("Music on/off (M)")
 
 # SNOMED International badge, pinned bottom-right, above everything.
 func _build_logo() -> void:
@@ -597,15 +657,58 @@ func _build_links_panel() -> void:
 	links.scroll_active = false
 	links.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	links.custom_minimum_size = Vector2(152, 0)
+	links.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	links.add_theme_font_size_override("normal_font_size", 13)
-	var hex := Palette.ACCENT2.to_html(false)
-	links.text = "[url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support Portal →[/color][/u][/url]\n\n[url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url]" % [hex, hex]
 	links.meta_clicked.connect(_on_link_meta)
 	links.meta_hover_started.connect(func(_m): links.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
 	links.meta_hover_ended.connect(func(_m): links.mouse_default_cursor_shape = Control.CURSOR_ARROW)
 	vb.add_child(links)
+	_links_rtl = links
+	_set_links_text()
 
 	panel.reset_size()
+
+var _links_rtl: RichTextLabel
+func _set_links_text() -> void:
+	var hex := Palette.ACCENT2.to_html(false)
+	_links_rtl.text = "[url=https://www.implementation.snomed.org/][u][color=#%s]%s[/color][/u][/url]\n\n[url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]%s[/color][/u][/url]" % [hex, tr("Implementation Support Portal →"), hex, tr("SNOMED Demonstrators →")]
+
+var _footer_rtl: RichTextLabel
+func _set_footer_text() -> void:
+	var lhex := Palette.ACCENT2.to_html(false)
+	var mhex := Palette.MUTED.to_html(false)
+	_footer_rtl.text = "[center][url=https://www.implementation.snomed.org/][u][color=#%s]%s[/color][/u][/url]      [color=#%s]·[/color]      [url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]%s[/color][/u][/url][/center]" % [lhex, tr("Implementation Support Portal →"), mhex, lhex, tr("SNOMED Demonstrators →")]
+
+var _rules_rtl: RichTextLabel
+func _set_rules_text() -> void:
+	var acc := Palette.ACCENT.to_html(false)
+	var bad := Palette.INCORRECT.to_html(false)
+	var good := Palette.CORRECT.to_html(false)
+	_rules_rtl.text = "\n".join([
+		"[color=#%s]●[/color]  %s" % [acc, tr("Fill a concept to clear it — a new one takes its place. Endless mode.")],
+		"[color=#%s]●[/color]  %s" % [acc, tr("A relationship can fit more than one concept — any valid card counts.")],
+		"[color=#%s]●[/color]  %s" % [bad, tr("Wrong drop costs a life (you start with 3). Chain correct drops for combo ×5.")],
+		"[color=#%s]●[/color]  %s" % [good, tr("Earn a bonus life at 2,500 points, then every 7,500 (up to 6).")],
+	])
+
+var _legend_rtl: RichTextLabel
+
+var _contact_rtl: RichTextLabel
+func _set_contact_text() -> void:
+	var chex := Palette.ACCENT2.to_html(false)
+	var cmhex := Palette.MUTED.to_html(false)
+	_contact_rtl.text = "[center][color=#%s]%s[/color][url=mailto:info@snomed.org][u][color=#%s]info@snomed.org[/color][/u][/url][/center]" % [cmhex, tr("Questions? Write to "), chex]
+
+# How-to demo row (falling piece -> concept card). Rebuilt on language change.
+var _demo_box: HBoxContainer
+func _fill_demo() -> void:
+	for ch in _demo_box.get_children():
+		ch.queue_free()
+	_demo_box.add_child(_demo_piece(tr("Finding site"), tr("Lung structure")))
+	var arrow := _make_label("→", 40, Palette.MUTED)
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_demo_box.add_child(arrow)
+	_demo_box.add_child(_demo_card(tr("Pneumonia")))
 
 func _on_link_meta(meta) -> void:
 	OS.shell_open(str(meta))
@@ -736,13 +839,13 @@ func _build_overlays() -> void:
 	footer.add_theme_font_size_override("normal_font_size", 14)
 	footer.position = Vector2(0, SCREEN.y - 46)
 	footer.size = Vector2(SCREEN.x, 30)
-	var lhex := Palette.ACCENT2.to_html(false)
-	var mhex := Palette.MUTED.to_html(false)
-	footer.text = "[center][url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support Portal →[/color][/u][/url]      [color=#%s]·[/color]      [url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url][/center]" % [lhex, mhex, lhex]
+	footer.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	footer.meta_clicked.connect(_on_link_meta)
 	footer.meta_hover_started.connect(func(_m): footer.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
 	footer.meta_hover_ended.connect(func(_m): footer.mouse_default_cursor_shape = Control.CURSOR_ARROW)
 	start_panel.add_child(footer)
+	_footer_rtl = footer
+	_set_footer_text()
 
 	# "Made with Godot" credit, bottom-left (balances the SNOMED badge bottom-right).
 	var gtex = load("res://assets/godot_icon.svg")
@@ -770,11 +873,8 @@ func _build_overlays() -> void:
 	demo.add_theme_constant_override("separation", 18)
 	demo.alignment = BoxContainer.ALIGNMENT_CENTER
 	demo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	demo.add_child(_demo_piece("Finding site", "Lung structure"))
-	var arrow := _make_label("→", 40, Palette.MUTED)
-	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	demo.add_child(arrow)
-	demo.add_child(_demo_card("Pneumonia"))
+	_demo_box = demo
+	_fill_demo()
 	var demo_row := CenterContainer.new()
 	demo_row.add_child(demo)
 	h.vb.add_child(demo_row)
@@ -790,16 +890,10 @@ func _build_overlays() -> void:
 	rules.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rules.custom_minimum_size = Vector2(700, 0)
 	rules.add_theme_font_size_override("normal_font_size", 16)
-	var acc := Palette.ACCENT.to_html(false)
-	var bad := Palette.INCORRECT.to_html(false)
-	var good := Palette.CORRECT.to_html(false)
-	rules.text = "\n".join([
-		"[color=#%s]●[/color]  Fill a concept to clear it — a new one takes its place. Endless mode." % acc,
-		"[color=#%s]●[/color]  A relationship can fit more than one concept — any valid card counts." % acc,
-		"[color=#%s]●[/color]  Wrong drop costs a life (you start with 3). Chain correct drops for combo ×5." % bad,
-		"[color=#%s]●[/color]  Earn a bonus life at 2,500 points, then every 7,500 (up to 6)." % good,
-	])
+	rules.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	h.vb.add_child(rules)
+	_rules_rtl = rules
+	_set_rules_text()
 
 	# Controls as keycaps.
 	var cbox := VBoxContainer.new()
@@ -824,8 +918,10 @@ func _build_overlays() -> void:
 	legend.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	legend.custom_minimum_size = Vector2(700, 0)
 	legend.add_theme_font_size_override("normal_font_size", 15)
+	legend.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	legend.text = _hier_legend_text()
 	h.vb.add_child(legend)
+	_legend_rtl = legend
 
 	var back_btn := _make_button("BACK", _show_menu, true)
 	var hrow := CenterContainer.new()
@@ -848,13 +944,13 @@ func _build_overlays() -> void:
 	contact.focus_mode = Control.FOCUS_NONE
 	contact.custom_minimum_size = Vector2(700, 0)
 	contact.add_theme_font_size_override("normal_font_size", 16)
-	var chex := Palette.ACCENT2.to_html(false)
-	var cmhex := Palette.MUTED.to_html(false)
-	contact.text = "[center][color=#%s]Questions? Write to [/color][url=mailto:info@snomed.org][u][color=#%s]info@snomed.org[/color][/u][/url][/center]" % [cmhex, chex]
+	contact.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	contact.meta_clicked.connect(_on_link_meta)
 	contact.meta_hover_started.connect(func(_m): contact.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
 	contact.meta_hover_ended.connect(func(_m): contact.mouse_default_cursor_shape = Control.CURSOR_ARROW)
 	c.vb.add_child(contact)
+	_contact_rtl = contact
+	_set_contact_text()
 
 	var spacer2 := Control.new()
 	spacer2.custom_minimum_size = Vector2(0, 10)
@@ -908,7 +1004,7 @@ func _build_overlays() -> void:
 	name_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	name_row.add_theme_constant_override("separation", 8)
 	go_name_edit = LineEdit.new()
-	go_name_edit.placeholder_text = "Your name"
+	go_name_edit.placeholder_text = tr("Your name")
 	go_name_edit.max_length = 16
 	go_name_edit.custom_minimum_size = Vector2(220, 44)
 	go_name_edit.add_theme_font_size_override("font_size", 18)
@@ -952,6 +1048,7 @@ func _build_overlays() -> void:
 	review_rtl.custom_minimum_size = Vector2(860, 470)
 	review_rtl.add_theme_font_size_override("normal_font_size", 16)
 	review_rtl.add_theme_font_size_override("bold_font_size", 16)
+	review_rtl.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED   # concept data
 	review_rtl.meta_clicked.connect(_on_review_meta)
 	r.vb.add_child(review_rtl)
 	var review_back := _make_button("BACK", _close_review, true)
@@ -979,21 +1076,6 @@ func _build_overlays() -> void:
 	hsrow.add_child(hs_back)
 	hp.vb.add_child(hsrow)
 	_default_focus[highscores_panel] = hs_back
-
-	# Victory
-	var v := _make_overlay()
-	victory_panel = v.root
-	_add_centered_label(v.vb, "ROUND COMPLETE", 48, Palette.CORRECT)
-	vic_stats_label = _add_centered_label(v.vb, "", 22, Palette.TEXT)
-	var vic_btn := _make_button("PLAY AGAIN", restart_round, true)
-	var vrow := CenterContainer.new()
-	vrow.add_child(vic_btn)
-	v.vb.add_child(vrow)
-	var vic_menu := _make_button("MAIN MENU", _show_menu, false)
-	var vrow2 := CenterContainer.new()
-	vrow2.add_child(vic_menu)
-	v.vb.add_child(vrow2)
-	_default_focus[victory_panel] = vic_btn
 
 # ----- How-to-play visual helpers -----
 func _keycap(txt: String) -> Control:
@@ -1081,7 +1163,7 @@ func _demo_card(cname: String) -> Control:
 	var n := _make_label(cname, 15, Palette.TEXT)
 	n.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(n)
-	var row := _make_label("✓ Finding site → Lung structure", 12, Palette.attr_color("Finding site"))
+	var row := _make_label(tr("✓ Finding site → Lung structure"), 12, Palette.attr_color("Finding site"))
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(row)
 	return p
@@ -1097,11 +1179,11 @@ func _hier_legend_text() -> String:
 	var parts: Array = []
 	for c in cats:
 		var hex := Palette.hier_color(c[0]).to_html(false)
-		parts.append("[color=#%s]● %s[/color]" % [hex, c[1]])
-	return "[color=#9AA7BD]Card border color = concept hierarchy:[/color]\n" + "     ".join(parts)
+		parts.append("[color=#%s]● %s[/color]" % [hex, tr(c[1])])
+	return "[color=#9AA7BD]%s[/color]\n" % tr("Card border color = concept hierarchy:") + "     ".join(parts)
 
 func _show_only(panel: Control) -> void:
-	for pnl in [start_panel, howto_panel, credits_panel, pause_panel, gameover_panel, victory_panel, review_panel, highscores_panel]:
+	for pnl in [start_panel, howto_panel, credits_panel, pause_panel, gameover_panel, review_panel, highscores_panel]:
 		if pnl:
 			pnl.visible = (pnl == panel)
 	if panel != null and not _input_guard and _default_focus.has(panel):
@@ -1150,7 +1232,7 @@ func _populate_review() -> void:
 	var items := played_concepts.duplicate()
 	items.sort_custom(func(a, b): return a.label.naturalnocasecmp_to(b.label) < 0)
 	var lines: Array = []
-	lines.append("[color=#9AA7BD]%d concepts played — click an id to open it in the SNOMED browser[/color]\n" % items.size())
+	lines.append("[color=#9AA7BD]%s[/color]\n" % (tr("%d concepts played — click an id to open it in the SNOMED browser") % items.size()))
 	for c in items:
 		var url := "http://snomed.info/id/%s" % str(c.id)
 		lines.append("[b]%s[/b]   [url=%s][color=#6EA8FE]%s[/color][/url]" % [_bb(c.label), url, str(c.id)])
@@ -1167,7 +1249,7 @@ func _show_highscores() -> void:
 	_hs_from = state
 	_scores_ctx = "view"
 	state = State.HIGHSCORES
-	hs_status.text = "Loading…"
+	hs_status.text = tr("Loading…")
 	_clear_children(hs_list)
 	_show_only(highscores_panel)
 	scores.fetch_top()
@@ -1185,7 +1267,7 @@ func _clear_children(n: Node) -> void:
 func _populate_highscores(entries: Array) -> void:
 	_clear_children(hs_list)
 	if entries.is_empty():
-		hs_status.text = "No scores yet — be the first!"
+		hs_status.text = tr("No scores yet — be the first!")
 		return
 	hs_status.text = ""
 	for i in entries.size():
@@ -1237,14 +1319,14 @@ func _on_score_submitted(ok: bool) -> void:
 		_hs_from = State.GAMEOVER
 		_scores_ctx = "view"
 		state = State.HIGHSCORES
-		hs_status.text = "Loading…"
+		hs_status.text = tr("Loading…")
 		_clear_children(hs_list)
 		_show_only(highscores_panel)
 		scores.fetch_top()
 	else:
 		go_submit_btn.disabled = false
 		go_name_edit.editable = true
-		go_submit_btn.text = "RETRY"
+		go_submit_btn.text = tr("RETRY")
 
 # ----- round lifecycle -----
 func start_round() -> void:
@@ -1298,7 +1380,7 @@ func _run_countdown() -> void:
 		_show_countdown(n, Palette.ACCENT)
 		sfx.sfx_move()
 		await _delay(0.85)
-	_show_countdown("GO", Palette.CORRECT)
+	_show_countdown(tr("GO"), Palette.CORRECT)
 	var gt2 := create_tween()
 	gt2.tween_property(getready_label, "modulate:a", 0.0, 0.3)
 	sfx.sfx_correct()
@@ -1325,7 +1407,7 @@ func end_game() -> void:
 	state = State.GAMEOVER
 	current_piece = null
 	sfx.sfx_game_over()
-	go_stats_label.text = "Concepts completed: %d\nScore: %d\nBest combo: x%d" % [concepts_completed, score, maxi(best_combo, 1)]
+	go_stats_label.text = tr("Concepts completed: %d\nScore: %d\nBest combo: x%d") % [concepts_completed, score, maxi(best_combo, 1)]
 
 	# Lock input while the sequence plays (also stops reflex taps from restarting).
 	_input_guard = true
@@ -1337,7 +1419,7 @@ func end_game() -> void:
 	go_name_edit.text = ""
 	go_name_edit.editable = true
 	go_submit_btn.disabled = false
-	go_submit_btn.text = "SUBMIT"
+	go_submit_btn.text = tr("SUBMIT")
 
 	# Start fetching the leaderboard right away so we can decide (form or not)
 	# BEFORE revealing the menu — no layout jump.
@@ -1488,6 +1570,9 @@ func _process(delta: float) -> void:
 	_update_music()
 	if _version_label:
 		_version_label.visible = state != State.PLAYING   # menus only, not while playing
+	if _lang_btn:
+		# switching is safe only in the static menus (no live piece bag to desync)
+		_lang_btn.visible = state == State.START or state == State.HOWTO or state == State.CREDITS
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
 	var speed := current_fall_speed
@@ -1643,7 +1728,7 @@ func resolve_drop(lane: int) -> void:
 		combo = 0
 		_update_hud()
 		lane_cards[lane].flash_wrong()
-		_show_message("Not part of this concept", Palette.INCORRECT)
+		_show_message(tr("Not part of this concept"), Palette.INCORRECT)
 		_highlight_valid_targets(piece)
 		_crt_error_burst()
 		sfx.sfx_wrong()
@@ -1677,7 +1762,7 @@ func _complete_concept(lane: int) -> void:
 	_increase_speed()
 	_update_hud()
 	sfx.sfx_concept_complete()
-	_show_message("CONCEPT COMPLETE  +%d" % bonus, Palette.ACCENT)
+	_show_message(tr("CONCEPT COMPLETE  +%d") % bonus, Palette.ACCENT)
 	_check_extra_life()   # its own center popup, independent of the concept message
 	await lane_cards[lane].play_complete_animation()
 	_replace_completed_concept(lane)
@@ -1769,7 +1854,7 @@ func _check_extra_life() -> void:
 # Big center-of-well toast for a bonus life: a heart that pops in with a pulse,
 # holds, then drifts up and fades. More visible than the small status message.
 func _extra_life_popup() -> void:
-	var l := _make_label("♥  EXTRA LIFE", 40, Palette.INCORRECT)   # red, matching the LIVES hearts
+	var l := _make_label(tr("♥  EXTRA LIFE"), 40, Palette.INCORRECT)   # red, matching the LIVES hearts
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.size = Vector2(WELL_RIGHT - WELL_LEFT, 60)
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE

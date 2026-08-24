@@ -27,6 +27,7 @@ var _blocks: Array = []   # each: {panel, attr, val, speed, w, h}
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED   # decorative sample text
 	clip_contents = true
 	for i in COUNT:
 		_blocks.append(_make_block())

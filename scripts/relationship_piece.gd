@@ -31,6 +31,8 @@ func _build() -> void:
 		reset_size()
 		return
 	_built = true
+	# Text is concept data (already in the chosen language) — never auto-translate.
+	auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 
 	# Attribute type colors the TEXT only. The frame stays a consistent accent,
 	# so the falling piece never looks like it "matches" a hierarchy-colored card.

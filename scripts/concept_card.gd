@@ -33,6 +33,8 @@ func _ensure_built() -> void:
 	if _built:
 		return
 	_built = true
+	# Card text is concept data (already in the chosen language) — never auto-translate.
+	auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
 	custom_minimum_size = Vector2(CARD_W, 0)
 	mouse_filter = Control.MOUSE_FILTER_STOP   # receive clicks/taps (children stay IGNORE)
 

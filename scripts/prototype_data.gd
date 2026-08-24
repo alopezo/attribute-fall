@@ -6,7 +6,23 @@ extends RefCounted
 #   {"id","label","relationships":[{"attribute","value"}, ...]}
 # Loaded once; served as an endless, reshuffling pool (infinite mode).
 
-const DATA_PATH := "res://data/concepts.json"
+const DATA_PATH_EN := "res://data/concepts.json"
+const DATA_PATH_ES := "res://data/concepts.es.json"
+
+static var _lang := "en"
+
+# Switch the concept language ("en" / "es"). Forces a reload on next access.
+# The ES file mirrors the EN file's order and structure, so a pool walk stays
+# valid across a switch (same index -> same concept, translated).
+static func set_language(lang: String) -> void:
+	if lang == _lang:
+		return
+	_lang = lang
+	_loaded = false
+	_all = []
+
+static func _data_path() -> String:
+	return DATA_PATH_ES if _lang == "es" else DATA_PATH_EN
 
 # Minimal fallback so the game still runs if the JSON is missing.
 const FALLBACK := [
@@ -39,8 +55,9 @@ static func _load() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	if FileAccess.file_exists(DATA_PATH):
-		var f := FileAccess.open(DATA_PATH, FileAccess.READ)
+	var path := _data_path()
+	if FileAccess.file_exists(path):
+		var f := FileAccess.open(path, FileAccess.READ)
 		if f != null:
 			var parsed = JSON.parse_string(f.get_as_text())
 			f.close()
