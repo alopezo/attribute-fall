@@ -220,6 +220,7 @@ var _music_slash: ColorRect
 var _duck_target := 0.0
 var _duck_tween: Tween
 var _music_locked := false          # pause automatic music switching (start countdown)
+var _audio_kicked := false          # web audio unlocks on the first user gesture
 
 func _load_music(path: String) -> AudioStream:
 	var s = load(path)
@@ -1429,6 +1430,16 @@ func _process(delta: float) -> void:
 	if current_piece.position.y >= target:
 		current_piece.position.y = target
 		resolve_drop(current_piece.lane_index)
+
+# Runs before the GUI, so it sees button clicks too. On the first user gesture,
+# (re)start the active music so browsers unlock audio and it plays immediately.
+func _input(event: InputEvent) -> void:
+	if _audio_kicked:
+		return
+	if event.is_pressed():
+		_audio_kicked = true
+		if not _mplayers.is_empty() and not _music_locked:
+			_mplayers[_mactive].play()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("af_mute"):
