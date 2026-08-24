@@ -19,6 +19,8 @@ const LANE_COUNT := 4
 const TOTAL_CONCEPTS := 8
 const START_LIVES := 3
 const MAX_COMBO := 5
+const SCORE_BASE := 12      # per correct drop, before combo/speed
+const SCORE_CONCEPT := 45   # bonus per completed concept, before speed
 
 const SCREEN := Vector2(1280, 720)
 const CARD_W := 190.0                            # keep in sync with ConceptCard.CARD_W
@@ -1536,7 +1538,7 @@ func resolve_drop(lane: int) -> void:
 	if correct:
 		combo = mini(combo + 1, MAX_COMBO)
 		best_combo = maxi(best_combo, combo)
-		var gained := 100 * combo
+		var gained := roundi(SCORE_BASE * combo * _speed_factor())
 		score += gained
 		_update_hud()
 		_pulse_combo()
@@ -1586,12 +1588,13 @@ func _is_concept_complete(concept: Dictionary) -> bool:
 	return true
 
 func _complete_concept(lane: int) -> void:
-	score += 500
+	var bonus := roundi(SCORE_CONCEPT * _speed_factor())
+	score += bonus
 	concepts_completed += 1
 	_increase_speed()
 	_update_hud()
 	sfx.sfx_concept_complete()
-	_show_message("CONCEPT COMPLETE", Palette.ACCENT)
+	_show_message("CONCEPT COMPLETE  +%d" % bonus, Palette.ACCENT)
 	await lane_cards[lane].play_complete_animation()
 	_replace_completed_concept(lane)
 
@@ -1613,6 +1616,10 @@ func _record_played(c: Dictionary) -> void:
 
 func _increase_speed() -> void:
 	current_fall_speed = minf(FALL_SPEED_START + FALL_SPEED_STEP * concepts_completed, FALL_SPEED_MAX)
+
+# Grows from 1.0 as the fall speed rises; makes scores vary and not stay round.
+func _speed_factor() -> float:
+	return current_fall_speed / FALL_SPEED_START
 
 func _highlight_valid_targets(piece: RelationshipPiece) -> void:
 	for i in LANE_COUNT:
