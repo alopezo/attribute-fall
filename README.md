@@ -12,11 +12,11 @@ Built with **Godot 4.5** (GDScript).
 ## Assetless by design
 
 All visuals are **generated in code** with Godot's native UI primitives — `Control`
-nodes and `StyleBoxFlat` (rounded rects, borders, glow). There are **no sprites or
-bitmap art**: just a couple of vector logos (SVG), a bundled font for glyph coverage,
-**procedural sound effects** (PCM generated at runtime), and a **screen shader** for the
-CRT/glitch effect. The result is tiny, crisp at any resolution, and fully themeable from
-one palette.
+nodes and `StyleBoxFlat` (rounded rects, borders, glow). There's **no sprite or bitmap
+game art**: just a couple of vector logos (SVG), a bundled font for glyph coverage, a
+**screen shader** for the CRT/glitch effect, and **procedural sound effects** (PCM
+generated at runtime) alongside a couple of bundled music tracks. The result is crisp at
+any resolution and fully themeable from one palette.
 
 ## Play
 
@@ -35,9 +35,11 @@ godot --path .
 | Hard drop | Space | A | — |
 | Drop on a concept | — | — | click/tap the card |
 | Pause | Esc | Start | — |
+| Mute music | M | — | click ♪ |
 
-Concept cards are colored by their top-level **hierarchy** (finding, procedure, specimen,
-product, situation, substance…); falling blocks are colored by **attribute type**.
+Concept cards are colored by their top-level **hierarchy** (finding, procedure, product,
+situation, substance, observable, body structure…); each falling block keeps a consistent
+accent frame, with its **attribute name tinted by attribute type**.
 
 ## Game data
 

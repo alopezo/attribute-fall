@@ -52,3 +52,12 @@ func sfx_concept_complete() -> void:
 
 func sfx_game_over() -> void:
 	_play(110.0, 0.55, 0.40)
+
+# Rising 3-note arpeggio for a bonus life (celebratory "1-up"). Fire-and-forget;
+# callers should not await it.
+func sfx_extra_life() -> void:
+	_play(660.0, 0.10, 0.30)
+	await get_tree().create_timer(0.09).timeout
+	_play(880.0, 0.10, 0.30)
+	await get_tree().create_timer(0.09).timeout
+	_play(1180.0, 0.14, 0.32)

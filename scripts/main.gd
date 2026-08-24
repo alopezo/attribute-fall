@@ -18,9 +18,14 @@ const Scores = preload("res://scripts/scores.gd")
 const LANE_COUNT := 4
 const TOTAL_CONCEPTS := 8
 const START_LIVES := 3
+const MAX_LIVES := 6         # cap on bonus lives (HUD fit + anti-hoarding)
 const MAX_COMBO := 5
 const SCORE_BASE := 12      # per correct drop, before combo/speed
 const SCORE_CONCEPT := 45   # bonus per completed concept, before speed
+# Bonus lives: first at LIFE_FIRST, then every LIFE_INTERVAL (2500, 7500, 15000, ...).
+# Points scale with speed, so these real-world intervals shrink as play speeds up.
+const LIFE_FIRST := 2500
+const LIFE_INTERVAL := 7500
 
 const SCREEN := Vector2(1280, 720)
 const CARD_W := 190.0                            # keep in sync with ConceptCard.CARD_W
@@ -38,7 +43,7 @@ const FALL_SPEED_SOFT := 300.0
 const FALL_SPEED_STEP := 11.0
 const FALL_SPEED_MAX := 190.0
 
-enum State { START, HOWTO, PLAYING, PAUSED, GAMEOVER, VICTORY, REVIEW, HIGHSCORES }
+enum State { START, HOWTO, CREDITS, PLAYING, PAUSED, GAMEOVER, VICTORY, REVIEW, HIGHSCORES }
 
 # ----- game state -----
 var state: int = State.START
@@ -56,6 +61,7 @@ var score := 0
 var combo := 0
 var best_combo := 0
 var lives := START_LIVES
+var _next_life_score := LIFE_FIRST     # next score threshold that grants a bonus life
 var concepts_completed := 0
 var current_fall_speed := FALL_SPEED_START
 
@@ -94,6 +100,7 @@ var go_submit_btn: Button
 
 var start_panel: Control
 var howto_panel: Control
+var credits_panel: Control
 var pause_panel: Control
 var gameover_panel: Control
 var go_title: Label
@@ -139,6 +146,7 @@ func _setup_fonts() -> void:
 	scores.submitted.connect(_on_score_submitted)
 	_build_music()
 	_build_logo()
+	_build_version_label()
 	_build_crt()
 	_build_music_toggle()
 	_show_only(start_panel)
@@ -358,6 +366,23 @@ func _build_logo() -> void:
 	logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	logo.modulate = Color(1, 1, 1, 0.92)
 	add_child(logo)
+
+# Version badge, pinned top-left. Reads application/config/version so it
+# stays in sync with project.godot. (Top-left is clear of the HUD, the music
+# toggle, the SNOMED logo, and the web loading footer.) Menus only — hidden
+# while actively playing.
+var _version_label: Label
+func _build_version_label() -> void:
+	var v: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	if v == "":
+		return
+	_version_label = Label.new()
+	_version_label.text = "v" + v
+	_version_label.add_theme_font_size_override("font_size", 13)
+	_version_label.add_theme_color_override("font_color", Palette.MUTED)
+	_version_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_version_label.position = Vector2(16.0, 10.0)
+	add_child(_version_label)
 
 # ----- input actions (keyboard + gamepad, ready for Steam Deck) -----
 func _setup_input() -> void:
@@ -692,7 +717,8 @@ func _build_overlays() -> void:
 	var start_btn := _make_button("START", start_round, true)
 	var howto_btn := _make_button("HOW TO PLAY", _show_howto, false)
 	var hs_btn := _make_button("HIGH SCORES", _show_highscores, false)
-	var menu_btns := [start_btn, howto_btn, hs_btn]
+	var credits_btn := _make_button("CREDITS", _show_credits, false)
+	var menu_btns := [start_btn, howto_btn, hs_btn, credits_btn]
 	if not OS.has_feature("web"):   # EXIT is meaningless in a browser
 		menu_btns.append(_make_button("EXIT", _exit_game, false))
 	for btn in menu_btns:
@@ -766,10 +792,12 @@ func _build_overlays() -> void:
 	rules.add_theme_font_size_override("normal_font_size", 16)
 	var acc := Palette.ACCENT.to_html(false)
 	var bad := Palette.INCORRECT.to_html(false)
+	var good := Palette.CORRECT.to_html(false)
 	rules.text = "\n".join([
 		"[color=#%s]●[/color]  Fill a concept to clear it — a new one takes its place. Endless mode." % acc,
 		"[color=#%s]●[/color]  A relationship can fit more than one concept — any valid card counts." % acc,
-		"[color=#%s]●[/color]  Wrong drop costs a life (you have 3). Chain correct drops for combo ×5." % bad,
+		"[color=#%s]●[/color]  Wrong drop costs a life (you start with 3). Chain correct drops for combo ×5." % bad,
+		"[color=#%s]●[/color]  Earn a bonus life at 2,500 points, then every 7,500 (up to 6)." % good,
 	])
 	h.vb.add_child(rules)
 
@@ -799,15 +827,48 @@ func _build_overlays() -> void:
 	legend.text = _hier_legend_text()
 	h.vb.add_child(legend)
 
-	var credit := _make_label("Music: Free Rhythm Game Music Pack 1 — Tricks & Traps (CC0, OpenGameArt.org)", 12, Palette.MUTED)
-	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	h.vb.add_child(credit)
-
 	var back_btn := _make_button("BACK", _show_menu, true)
 	var hrow := CenterContainer.new()
 	hrow.add_child(back_btn)
 	h.vb.add_child(hrow)
 	_default_focus[howto_panel] = back_btn
+
+	# Credits
+	var c := _make_overlay(true)
+	credits_panel = c.root
+	_add_centered_label(c.vb, "CREDITS", 40, Palette.ACCENT)
+	_add_centered_label(c.vb, "Attribute Fall", 24, Palette.TEXT)
+	_add_centered_label(c.vb, "SNOMED Implementation Support Team", 19, Palette.TEXT)
+
+	# Contact (clickable mailto).
+	var contact := RichTextLabel.new()
+	contact.bbcode_enabled = true
+	contact.fit_content = true
+	contact.scroll_active = false
+	contact.focus_mode = Control.FOCUS_NONE
+	contact.custom_minimum_size = Vector2(700, 0)
+	contact.add_theme_font_size_override("normal_font_size", 16)
+	var chex := Palette.ACCENT2.to_html(false)
+	var cmhex := Palette.MUTED.to_html(false)
+	contact.text = "[center][color=#%s]Questions? Write to [/color][url=mailto:info@snomed.org][u][color=#%s]info@snomed.org[/color][/u][/url][/center]" % [cmhex, chex]
+	contact.meta_clicked.connect(_on_link_meta)
+	contact.meta_hover_started.connect(func(_m): contact.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
+	contact.meta_hover_ended.connect(func(_m): contact.mouse_default_cursor_shape = Control.CURSOR_ARROW)
+	c.vb.add_child(contact)
+
+	var spacer2 := Control.new()
+	spacer2.custom_minimum_size = Vector2(0, 10)
+	c.vb.add_child(spacer2)
+
+	_add_centered_label(c.vb, "Music: Free Rhythm Game Music Pack 1 — Tricks & Traps (CC0, OpenGameArt.org)", 13, Palette.MUTED)
+	_add_centered_label(c.vb, "Built with Godot Engine (MIT)", 13, Palette.MUTED)
+	_add_centered_label(c.vb, "SNOMED CT content © SNOMED International", 13, Palette.MUTED)
+
+	var cback := _make_button("BACK", _show_menu, true)
+	var cbrow := CenterContainer.new()
+	cbrow.add_child(cback)
+	c.vb.add_child(cbrow)
+	_default_focus[credits_panel] = cback
 
 	# Pause menu
 	var p := _make_overlay()
@@ -1040,7 +1101,7 @@ func _hier_legend_text() -> String:
 	return "[color=#9AA7BD]Card border color = concept hierarchy:[/color]\n" + "     ".join(parts)
 
 func _show_only(panel: Control) -> void:
-	for pnl in [start_panel, howto_panel, pause_panel, gameover_panel, victory_panel, review_panel, highscores_panel]:
+	for pnl in [start_panel, howto_panel, credits_panel, pause_panel, gameover_panel, victory_panel, review_panel, highscores_panel]:
 		if pnl:
 			pnl.visible = (pnl == panel)
 	if panel != null and not _input_guard and _default_focus.has(panel):
@@ -1057,6 +1118,10 @@ func _show_menu() -> void:
 func _show_howto() -> void:
 	state = State.HOWTO
 	_show_only(howto_panel)
+
+func _show_credits() -> void:
+	state = State.CREDITS
+	_show_only(credits_panel)
 
 func _exit_game() -> void:
 	get_tree().quit()
@@ -1187,6 +1252,7 @@ func start_round() -> void:
 	combo = 0
 	best_combo = 0
 	lives = START_LIVES
+	_next_life_score = LIFE_FIRST
 	concepts_completed = 0
 	current_fall_speed = FALL_SPEED_START
 	last_pair_key = ""
@@ -1420,6 +1486,8 @@ func spawn_next_piece() -> void:
 func _process(delta: float) -> void:
 	_crt_tick(delta)
 	_update_music()
+	if _version_label:
+		_version_label.visible = state != State.PLAYING   # menus only, not while playing
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
 	var speed := current_fall_speed
@@ -1451,6 +1519,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# here we only handle in-game actions and cancel/back.
 	match state:
 		State.HOWTO:
+			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
+				_show_menu()
+		State.CREDITS:
 			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
 				_show_menu()
 		State.PLAYING:
@@ -1552,6 +1623,7 @@ func resolve_drop(lane: int) -> void:
 		var gained := roundi(SCORE_BASE * combo * _speed_factor())
 		score += gained
 		_update_hud()
+		_check_extra_life()
 		_pulse_combo()
 		lane_cards[lane].refresh()
 		lane_cards[lane].flash_correct()
@@ -1606,6 +1678,7 @@ func _complete_concept(lane: int) -> void:
 	_update_hud()
 	sfx.sfx_concept_complete()
 	_show_message("CONCEPT COMPLETE  +%d" % bonus, Palette.ACCENT)
+	_check_extra_life()   # its own center popup, independent of the concept message
 	await lane_cards[lane].play_complete_animation()
 	_replace_completed_concept(lane)
 
@@ -1671,6 +1744,52 @@ func _pulse_combo() -> void:
 	var t := create_tween()
 	t.tween_property(combo_val, "scale", Vector2.ONE, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _pulse_life() -> void:
+	lives_val.pivot_offset = lives_val.size / 2.0
+	lives_val.scale = Vector2(1.5, 1.5)
+	var t := create_tween()
+	t.tween_property(lives_val, "scale", Vector2.ONE, 0.28) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+# Award bonus lives when the score crosses the milestones (2500, 7500, 15000, ...).
+# The loop handles a single gain that crosses several thresholds at once. Past the
+# cap it keeps advancing the threshold silently (no award, no message spam).
+func _check_extra_life() -> void:
+	while score >= _next_life_score:
+		var reached := _next_life_score
+		_next_life_score = LIFE_INTERVAL if reached == LIFE_FIRST else reached + LIFE_INTERVAL
+		if lives < MAX_LIVES:
+			lives += 1
+			_update_hud()
+			_pulse_life()
+			_extra_life_popup()
+			sfx.sfx_extra_life()
+
+# Big center-of-well toast for a bonus life: a heart that pops in with a pulse,
+# holds, then drifts up and fades. More visible than the small status message.
+func _extra_life_popup() -> void:
+	var l := _make_label("♥  EXTRA LIFE", 40, Palette.INCORRECT)   # red, matching the LIVES hearts
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.size = Vector2(WELL_RIGHT - WELL_LEFT, 60)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	piece_layer.add_child(l)
+	l.position = Vector2(WELL_LEFT, 262.0)
+	l.pivot_offset = l.size / 2.0
+	l.scale = Vector2(0.6, 0.6)
+	l.modulate.a = 0.0
+	# Scale: pop in with overshoot, then settle — the pulse.
+	var ts := create_tween()
+	ts.tween_property(l, "scale", Vector2(1.18, 1.18), 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	ts.tween_property(l, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_SINE)
+	# Alpha + drift: fade in, hold, then rise and fade out, then free.
+	var t := create_tween()
+	t.tween_property(l, "modulate:a", 1.0, 0.15)
+	t.tween_interval(0.7)
+	t.set_parallel(true)
+	t.tween_property(l, "modulate:a", 0.0, 0.5).set_ease(Tween.EASE_IN)
+	t.tween_property(l, "position:y", l.position.y - 30.0, 0.5)
+	t.chain().tween_callback(l.queue_free)
 
 func _combo_popup(lane: int, n: int) -> void:
 	var l := _make_label("COMBO ×%d" % n, 22, _combo_color(n))
