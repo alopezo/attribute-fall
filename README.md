@@ -50,8 +50,9 @@ python3 tools/build_concepts.py "/path/to/<Release>/Snapshot" data/concepts.json
 
 It keeps active concepts with 2–5 defining attributes (active, inferred, excluding *Is a*),
 using the **preferred synonym** of the concept, the attribute type, and the target value,
-and tags each with its top-level hierarchy. The bundled `data/concepts.json` was built from
-the **International Patient Summary (IPS) Terminology** free set (~8,200 concepts).
+and tags each with its top-level hierarchy (Specimen concepts are excluded). The bundled
+`data/concepts.json` was built from the **International Patient Summary (IPS) Terminology**
+free set (~6,900 concepts).
 
 > SNOMED CT is distributed by SNOMED International. Use of SNOMED CT content is subject to the
 > applicable SNOMED CT licence; the IPS terminology subset is freely available.
@@ -60,3 +61,9 @@ the **International Patient Summary (IPS) Terminology** free set (~8,200 concept
 
 - Implementation Support Portal — https://www.implementation.snomed.org/
 - SNOMED Demonstrators — https://ihtsdo.github.io/sct-implementation-demonstrator/#/home
+
+## Credits
+
+- **Music:** Free Rhythm Game Music Pack 1 — Tricks & Traps. Licensed under CC0 1.0 /
+  Public Domain. Source: OpenGameArt.org.
+- Built with [Godot](https://godotengine.org/) (MIT).

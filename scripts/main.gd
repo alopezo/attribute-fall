@@ -59,6 +59,7 @@ var current_fall_speed := FALL_SPEED_START
 
 var last_pair_key := ""
 var _bag: Array = []                # shuffle bag of pair keys
+var _streak: Dictionary = {}        # concept id -> consecutive spawns owned by it
 var _skip_lane_next_spawn := -1     # lane just refilled; its concept is skipped for one spawn
 
 # ----- nodes -----
@@ -137,6 +138,7 @@ func _setup_fonts() -> void:
 	_build_music()
 	_build_logo()
 	_build_crt()
+	_build_music_toggle()
 	_show_only(start_panel)
 	state = State.START
 
@@ -198,26 +200,143 @@ func _crt_error_burst() -> void:
 	t.tween_method(_set_crt, 0.5, 0.0, 0.2)
 	t.tween_callback(func(): _crt_error = false)
 
-# Looping background music. On web the browser resumes audio on first input.
-var music: AudioStreamPlayer
+# Looping background music: menu track vs in-game track, crossfaded on switch.
+# Two players fade between each other; a dedicated bus handles mute (independent
+# of the fade). On web the browser resumes audio on first input.
+const MUSIC_VOL := -12.0
+const MUSIC_FADE := 1.2
+var _music_menu: AudioStream
+var _music_game: AudioStream
 var _music_muted := false
+var _music_bus := -1
+var _mplayers: Array = []          # two AudioStreamPlayers for crossfading
+var _mactive := 0
+var _mcur: AudioStream
+var _mfade: Tween
+var _music_btn: Button
+var _music_slash: ColorRect
+var _duck_target := 0.0
+var _duck_tween: Tween
+var _music_locked := false          # pause automatic music switching (start countdown)
+
+func _load_music(path: String) -> AudioStream:
+	var s = load(path)
+	if s != null and "loop" in s:
+		s.loop = true
+	return s
+
 func _build_music() -> void:
-	var stream = load("res://assets/music/1_ascend.ogg")
-	if stream == null:
+	_music_menu = _load_music("res://assets/music/2_starting_over.ogg")
+	_music_game = _load_music("res://assets/music/1_ascend.ogg")
+	_music_bus = AudioServer.bus_count
+	AudioServer.add_bus(_music_bus)
+	AudioServer.set_bus_name(_music_bus, "Music")
+	AudioServer.set_bus_send(_music_bus, "Master")
+	for i in 2:
+		var p := AudioStreamPlayer.new()
+		p.bus = "Music"
+		p.volume_db = -80.0
+		add_child(p)
+		_mplayers.append(p)
+	_mcur = _music_menu
+	_mplayers[_mactive].stream = _music_menu
+	_mplayers[_mactive].volume_db = MUSIC_VOL
+	_mplayers[_mactive].play()
+
+# Crossfade to `stream` over `fade` seconds.
+func _play_music(stream: AudioStream, fade: float) -> void:
+	if _mplayers.is_empty() or stream == null or stream == _mcur:
 		return
-	if "loop" in stream:
-		stream.loop = true
-	music = AudioStreamPlayer.new()
-	music.stream = stream
-	music.volume_db = -12.0
-	add_child(music)
-	music.play()
+	_mcur = stream
+	var old_i := _mactive
+	var new_i := 1 - _mactive
+	var np: AudioStreamPlayer = _mplayers[new_i]
+	np.stream = stream
+	np.volume_db = -80.0
+	np.play()
+	_mactive = new_i
+	if _mfade and _mfade.is_valid():
+		_mfade.kill()
+	if fade <= 0.0:
+		np.volume_db = MUSIC_VOL          # start immediately, no ramp
+		_mplayers[old_i].volume_db = -80.0
+		return
+	_mfade = create_tween()
+	_mfade.set_parallel(true)
+	_mfade.tween_property(np, "volume_db", MUSIC_VOL, fade)
+	_mfade.tween_property(_mplayers[old_i], "volume_db", -80.0, fade)
+
+# Fade the currently playing track down to silence (without changing _mcur).
+func _fade_music_out(dur: float) -> void:
+	if _mplayers.is_empty():
+		return
+	if _mfade and _mfade.is_valid():
+		_mfade.kill()
+	_mfade = create_tween()
+	_mfade.tween_property(_mplayers[_mactive], "volume_db", -80.0, dur)
+
+# Game track while playing/paused, menu track elsewhere — crossfaded.
+# Duck the music bus while paused so it stays audible but quieter.
+# Skipped while _music_locked (e.g. during the start countdown).
+func _update_music() -> void:
+	if _mplayers.is_empty() or _music_locked:
+		return
+	var duck := -14.0 if state == State.PAUSED else 0.0
+	if not is_equal_approx(duck, _duck_target):
+		_duck_target = duck
+		if _duck_tween and _duck_tween.is_valid():
+			_duck_tween.kill()
+		_duck_tween = create_tween()
+		_duck_tween.tween_method(_set_music_bus_db, AudioServer.get_bus_volume_db(_music_bus), duck, 0.25)
+	var want: AudioStream = _music_game if state == State.PLAYING or state == State.PAUSED else _music_menu
+	_play_music(want, MUSIC_FADE)
+
+func _set_music_bus_db(v: float) -> void:
+	if _music_bus >= 0:
+		AudioServer.set_bus_volume_db(_music_bus, v)
 
 func _toggle_music() -> void:
-	if music == null:
-		return
 	_music_muted = not _music_muted
-	music.volume_db = -80.0 if _music_muted else -12.0
+	if _music_bus >= 0:
+		AudioServer.set_bus_mute(_music_bus, _music_muted)
+	_update_music_icon()
+
+# Clickable ♪ toggle, top-right, always visible.
+func _build_music_toggle() -> void:
+	_music_btn = Button.new()
+	_music_btn.text = "♪"
+	_music_btn.tooltip_text = "Music on/off (M)"
+	_music_btn.focus_mode = Control.FOCUS_NONE
+	_music_btn.add_theme_font_size_override("font_size", 24)
+	_music_btn.custom_minimum_size = Vector2(40, 40)
+	_music_btn.size = Vector2(40, 40)
+	_music_btn.position = Vector2(SCREEN.x - 54.0, 12.0)
+	_music_btn.text = "♪"
+	var empty := StyleBoxEmpty.new()
+	for s in ["normal", "hover", "pressed", "focus"]:
+		_music_btn.add_theme_stylebox_override(s, empty)
+	_music_btn.pressed.connect(_toggle_music)
+	add_child(_music_btn)
+
+	# Diagonal strike shown when muted (drawn over the note).
+	_music_slash = ColorRect.new()
+	_music_slash.color = Palette.MUTED
+	_music_slash.size = Vector2(30, 3)
+	_music_slash.position = Vector2(5, 18.5)
+	_music_slash.pivot_offset = Vector2(15, 1.5)
+	_music_slash.rotation = deg_to_rad(-45)
+	_music_slash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_music_slash.visible = false
+	_music_btn.add_child(_music_slash)
+	_update_music_icon()
+
+func _update_music_icon() -> void:
+	if _music_btn == null:
+		return
+	_music_btn.add_theme_color_override("font_color", Palette.MUTED if _music_muted else Palette.ACCENT)
+	_music_btn.add_theme_color_override("font_hover_color", Palette.TEXT)
+	if _music_slash:
+		_music_slash.visible = _music_muted
 
 # SNOMED International badge, pinned bottom-right, above everything.
 func _build_logo() -> void:
@@ -677,6 +796,10 @@ func _build_overlays() -> void:
 	legend.text = _hier_legend_text()
 	h.vb.add_child(legend)
 
+	var credit := _make_label("Music: Free Rhythm Game Music Pack 1 — Tricks & Traps (CC0, OpenGameArt.org)", 12, Palette.MUTED)
+	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	h.vb.add_child(credit)
+
 	var back_btn := _make_button("BACK", _show_menu, true)
 	var hrow := CenterContainer.new()
 	hrow.add_child(back_btn)
@@ -1065,6 +1188,7 @@ func start_round() -> void:
 	current_fall_speed = FALL_SPEED_START
 	last_pair_key = ""
 	_bag.clear()
+	_streak.clear()
 	_skip_lane_next_spawn = -1
 	input_locked = false
 
@@ -1084,8 +1208,15 @@ func start_round() -> void:
 	_hide_overlays()
 	get_viewport().gui_release_focus()   # so game keys aren't captured by a menu button
 	state = State.PLAYING
+	# Fade the menu music out; the countdown pulses play over silence, then the
+	# game track comes in as the countdown ends.
+	_music_locked = true
+	_fade_music_out(0.6)
 	await _run_countdown()
 	if state == State.PLAYING:
+		_music_locked = false
+		_mcur = null   # force the game track to (re)start
+		_play_music(_music_game, 0.0)   # start immediately, no fade-in
 		spawn_next_piece()
 
 # 3-2-1-GO so the player can read the concepts before the first piece falls.
@@ -1219,6 +1350,23 @@ func _refill_bag(keys: Array) -> void:
 		_bag[0] = _bag[_bag.size() - 1]
 		_bag[_bag.size() - 1] = tmp
 
+# True if choosing this pair would be the 3rd spawn in a row owned by a concept.
+func _would_exceed_streak(k: String, pool: Dictionary) -> bool:
+	for l in pool[k]["lanes"]:
+		var c = active_concepts[l]
+		if c != null and int(_streak.get(c.id, 0)) >= 2:
+			return true
+	return false
+
+# Record the concepts a spawned pair belongs to; concepts not owned reset to 0.
+func _register_owners(k: String, pool: Dictionary) -> void:
+	var new_streak := {}
+	for l in pool[k]["lanes"]:
+		var c = active_concepts[l]
+		if c != null:
+			new_streak[c.id] = int(_streak.get(c.id, 0)) + 1
+	_streak = new_streak
+
 func spawn_next_piece() -> void:
 	var pool := _pool_map()
 	if pool.is_empty():
@@ -1242,6 +1390,9 @@ func spawn_next_piece() -> void:
 		if skip >= 0 and lanes.size() == 1 and lanes[0] == skip:
 			deferred.append(k)
 			continue
+		if _would_exceed_streak(k, pool):   # avoid a 3rd piece in a row for one concept
+			deferred.append(k)
+			continue
 		chosen = k
 		break
 	# keep deferred pairs in the cycle for later spawns
@@ -1249,8 +1400,9 @@ func spawn_next_piece() -> void:
 		if not _bag.has(d):
 			_bag.append(d)
 	if chosen == "":
-		chosen = pool.keys()[randi() % pool.size()]   # fallback
+		chosen = deferred[0] if not deferred.is_empty() else pool.keys()[randi() % pool.size()]
 
+	_register_owners(chosen, pool)
 	last_pair_key = chosen
 	var pair = pool[chosen]
 	var piece := RelationshipPiece.new()
@@ -1264,6 +1416,7 @@ func spawn_next_piece() -> void:
 # ----- input & falling -----
 func _process(delta: float) -> void:
 	_crt_tick(delta)
+	_update_music()
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
 	var speed := current_fall_speed
