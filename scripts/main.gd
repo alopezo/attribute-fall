@@ -599,7 +599,7 @@ func _build_links_panel() -> void:
 	links.custom_minimum_size = Vector2(152, 0)
 	links.add_theme_font_size_override("normal_font_size", 13)
 	var hex := Palette.ACCENT2.to_html(false)
-	links.text = "[url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support →[/color][/u][/url]\n\n[url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url]" % [hex, hex]
+	links.text = "[url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support Portal →[/color][/u][/url]\n\n[url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url]" % [hex, hex]
 	links.meta_clicked.connect(_on_link_meta)
 	links.meta_hover_started.connect(func(_m): links.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
 	links.meta_hover_ended.connect(func(_m): links.mouse_default_cursor_shape = Control.CURSOR_ARROW)
@@ -738,7 +738,7 @@ func _build_overlays() -> void:
 	footer.size = Vector2(SCREEN.x, 30)
 	var lhex := Palette.ACCENT2.to_html(false)
 	var mhex := Palette.MUTED.to_html(false)
-	footer.text = "[center][url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support →[/color][/u][/url]      [color=#%s]·[/color]      [url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url][/center]" % [lhex, mhex, lhex]
+	footer.text = "[center][url=https://www.implementation.snomed.org/][u][color=#%s]Implementation Support Portal →[/color][/u][/url]      [color=#%s]·[/color]      [url=https://ihtsdo.github.io/sct-implementation-demonstrator/#/home][u][color=#%s]SNOMED Demonstrators →[/color][/u][/url][/center]" % [lhex, mhex, lhex]
 	footer.meta_clicked.connect(_on_link_meta)
 	footer.meta_hover_started.connect(func(_m): footer.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND)
 	footer.meta_hover_ended.connect(func(_m): footer.mouse_default_cursor_shape = Control.CURSOR_ARROW)
