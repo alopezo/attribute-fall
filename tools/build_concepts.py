@@ -1,23 +1,35 @@
 #!/usr/bin/env python3
-"""Build the Attribute Fall game database from a SNOMED CT RF2 Snapshot release.
+"""Build the Attribute Fall game database (data/concepts.json).
 
-Extracts every ACTIVE concept that has >= 2 defining attribute relationships
-(active, inferred, excluding 'Is a'), using the PREFERRED SYNONYM of the
-concept, the relationship type, and the target/value.
+Concept SET comes from the IPS terminology (the free International Patient
+Summary refset). RELATIONSHIPS and English labels come from a full SNOMED CT
+International RF2 release, so the modelling is the current one (the IPS free set
+lags behind and carries older modelling). Spanish is produced separately by
+tools/build_es.py from the SNOMED CT Argentina Edition.
+
+For each IPS member that is still active in the International release, we keep its
+ACTIVE + INFERRED (excluding 'Is a') attribute relationships, using preferred
+terms for the concept / attribute type / value, dedup by the text pair, keep
+concepts with 2-5 attributes, tag the top-level hierarchy, and drop a few
+categories / repetitive attribute-value pairs.
 
 Output: data/concepts.json — a list of
-    {"id": "<sctid>", "label": "<PT>", "relationships": [{"attribute","value"}, ...]}
+    {"id","label","hier","relationships":[{"attribute","value"}, ...]}
 
 Usage:
     python3 tools/build_concepts.py \
+        "/path/to/SnomedCT_InternationalRF2_.../Snapshot" \
         "/path/to/SnomedCT_IPSTerminologyRelease_.../Snapshot" \
         data/concepts.json
 """
 import csv
+import glob
 import json
 import os
 import sys
 from collections import defaultdict
+
+csv.field_size_limit(10 ** 7)
 
 # --- SNOMED CT metadata concept ids ---
 FSN = "900000000000003001"
@@ -55,52 +67,51 @@ CATEGORY_PRIORITY = [
 EXCLUDE_CATEGORIES = {"specimen"}
 
 # Attribute -> value pairs that make a concept play poorly: the repetitive
-# tumour-staging histopathology modelling ("Tumour invasion into X, in situ" and
-# friends). Drop any concept whose modelling contains one of these pairs.
+# tumour-staging histopathology modelling, and vaccine products.
 EXCLUDE_PAIRS = {
     ("Interprets", "Lesion observable"),
     ("Interprets", "Histopathology test"),
-    # Vaccine products ("... antigen only vaccine product") — repetitive
-    # "Plays role → Active immunity stimulant role" + "Has active ingredient".
     ("Plays role", "Active immunity stimulant role"),
 }
 
-# Skip/relabel a few very generic attribute types that read poorly in a game.
-# (Kept minimal on purpose; extend if desired.)
 MIN_RELS = 2
-MAX_RELS = 5          # exclude concepts with more than this, so every card shows
-                     # the concept's COMPLETE real modeling (no truncation)
+MAX_RELS = 5
 
 
-def find_file(folder, must_contain):
-    for name in os.listdir(folder):
-        if all(tok in name for tok in must_contain) and name.endswith(".txt"):
-            return os.path.join(folder, name)
-    raise FileNotFoundError(f"No file in {folder} matching {must_contain}")
+def find(snapshot, pattern):
+    hits = glob.glob(os.path.join(snapshot, "**", pattern), recursive=True)
+    if not hits:
+        raise FileNotFoundError(f"No file matching {pattern} under {snapshot}")
+    return hits[0]
 
 
 def read_rf2(path):
     with open(path, encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
+        for row in csv.DictReader(f, delimiter="\t"):
             yield row
 
 
 def main():
-    snapshot = sys.argv[1] if len(sys.argv) > 1 else None
-    out_path = sys.argv[2] if len(sys.argv) > 2 else "data/concepts.json"
-    if not snapshot or not os.path.isdir(snapshot):
-        sys.exit("Pass the path to the release's Snapshot folder as arg 1.")
+    if len(sys.argv) < 4:
+        sys.exit(__doc__)
+    intl, ips, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    term = os.path.join(snapshot, "Terminology")
-    lang_dir = os.path.join(snapshot, "Refset", "Language")
+    # 0) IPS concept set = active members of the IPS simple refset (816080008).
+    #    A precise, self-contained membership — independent of whatever dependency
+    #    concepts the IPS package happens to also ship.
+    ips_refset = find(ips, "der2_Refset_*Simple*Snapshot*.txt")
+    ips_set = set()
+    for row in read_rf2(ips_refset):
+        if row["active"] == "1":
+            ips_set.add(row["referencedComponentId"])
 
-    concept_file = find_file(term, ["sct2_Concept_"])
-    desc_file = find_file(term, ["sct2_Description_"])
-    rel_file = find_file(term, ["sct2_Relationship_", "Snapshot"])
-    lang_file = find_file(lang_dir, ["cRefset_", "Language"])
+    # International terminology files.
+    concept_file = find(intl, "sct2_Concept_Snapshot*.txt")
+    desc_file = find(intl, "sct2_Description_Snapshot*.txt")
+    rel_file = find(intl, "sct2_Relationship_Snapshot*.txt")
+    lang_file = find(intl, "der2_cRefset_LanguageSnapshot*.txt")
 
-    # 1) active concepts
+    # 1) active concepts (International)
     active_concepts = set()
     for row in read_rf2(concept_file):
         if row["active"] == "1":
@@ -112,13 +123,9 @@ def main():
     for row in read_rf2(desc_file):
         if row["active"] != "1":
             continue
-        did = row["id"]
-        cid = row["conceptId"]
-        typ = row["typeId"]
-        term_txt = row["term"]
-        desc[did] = (cid, typ, term_txt)
-        if typ == FSN:
-            fsn_of[cid] = term_txt
+        desc[row["id"]] = (row["conceptId"], row["typeId"], row["term"])
+        if row["typeId"] == FSN:
+            fsn_of[row["conceptId"]] = row["term"]
 
     # 3) preferred description ids (any language refset row marked Preferred)
     preferred_desc = set()
@@ -135,7 +142,6 @@ def main():
     def label_for(cid):
         if cid in pt:
             return pt[cid]
-        # fallback: FSN without the trailing semantic tag
         if cid in fsn_of:
             t = fsn_of[cid]
             if t.endswith(")") and " (" in t:
@@ -143,9 +149,9 @@ def main():
             return t
         return None
 
-    # 5) relationships: collect attributes AND Is-a parents (for hierarchy)
-    attrs = defaultdict(list)     # sourceId -> [(typeId, destId), ...]
-    parents = defaultdict(list)   # sourceId -> [parentId, ...]
+    # 5) relationships: attributes AND Is-a parents (for hierarchy)
+    attrs = defaultdict(list)
+    parents = defaultdict(list)
     for row in read_rf2(rel_file):
         if row["active"] != "1":
             continue
@@ -156,7 +162,6 @@ def main():
             continue
         attrs[row["sourceId"]].append((row["typeId"], row["destinationId"]))
 
-    # Determine each concept's game category from its top-level ancestor.
     cat_cache = {}
 
     def category_of(cid):
@@ -183,12 +188,15 @@ def main():
         cat_cache[cid] = cat
         return cat
 
-    # 6) build entries
+    # 6) build entries — only IPS members that are still active in International
     out = []
     skipped_no_label = 0
-    for cid, rels in attrs.items():
+    dropped_inactive = 0
+    for cid in ips_set:
         if cid not in active_concepts:
+            dropped_inactive += 1
             continue
+        rels = attrs.get(cid, [])
         clabel = label_for(cid)
         if not clabel:
             skipped_no_label += 1
@@ -200,7 +208,7 @@ def main():
             v = label_for(dst)
             if not a or not v:
                 continue
-            key = (a, v)               # game matches on the text pair
+            key = (a, v)
             if key in seen:
                 continue
             seen.add(key)
@@ -221,8 +229,9 @@ def main():
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
 
     total_rels = sum(len(c["relationships"]) for c in out)
+    print(f"IPS refset members: {len(ips_set)}  (dropped {dropped_inactive} inactive in International)")
     print(f"Wrote {len(out)} concepts ({total_rels} relationships) -> {out_path}")
-    print(f"Skipped {skipped_no_label} sources with no usable label")
+    print(f"Skipped {skipped_no_label} with no usable label")
 
 
 if __name__ == "__main__":

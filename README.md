@@ -43,18 +43,29 @@ accent frame, with its **attribute name tinted by attribute type**.
 
 ## Game data
 
-The concept pool is real SNOMED CT content, extracted from a **SNOMED CT RF2 release**
-by [`tools/build_concepts.py`](tools/build_concepts.py):
+The concept pool is real SNOMED CT content. The **concept set** is the free
+**International Patient Summary (IPS)** reference set; the **relationships and English
+terms** come from a full **SNOMED CT International** RF2 release (current modelling), and
+the **Spanish** edition is translated from the **SNOMED CT Argentina** release.
 
 ```bash
-python3 tools/build_concepts.py "/path/to/<Release>/Snapshot" data/concepts.json
+# English pool (concept set = IPS refset, modelling = International)
+python3 tools/build_concepts.py \
+    "/path/to/SnomedCT_InternationalRF2_.../Snapshot" \
+    "/path/to/SnomedCT_IPSTerminologyRelease_.../Snapshot" \
+    data/concepts.json
+
+# Spanish edition (same concepts, PT from the Argentina release)
+python3 tools/build_es.py data/concepts.json \
+    "/path/to/SnomedCT_Argentina-EditionRelease_.../Snapshot" \
+    data/concepts.es.json
 ```
 
-It keeps active concepts with 2–5 defining attributes (active, inferred, excluding *Is a*),
-using the **preferred synonym** of the concept, the attribute type, and the target value,
-and tags each with its top-level hierarchy (Specimen concepts are excluded). The bundled
-`data/concepts.json` was built from the **International Patient Summary (IPS) Terminology**
-free set (~6,900 concepts).
+For each IPS member still active in the International release it keeps the 2–5 defining
+attributes (active, inferred, excluding *Is a*), using the **preferred term** of the
+concept / attribute type / value, tags each with its top-level hierarchy (Specimen
+concepts and a few repetitive attribute-value patterns are excluded), yielding ~5,500
+concepts.
 
 > SNOMED CT is distributed by SNOMED International. Use of SNOMED CT content is subject to the
 > applicable SNOMED CT licence; the IPS terminology subset is freely available.
