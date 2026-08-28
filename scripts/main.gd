@@ -43,8 +43,18 @@ const FALL_SPEED_START := 38.0
 const FALL_SPEED_SOFT := 300.0
 const FALL_SPEED_STEP := 11.0
 const FALL_SPEED_MAX := 190.0
+# Gentle onboarding: the first few pieces of a round fall extra slow so a player
+# new to the game (SNOMED experts/learners, not gamers) has time to read and
+# orient. Piece INTRO_PIECES+1 onward uses the normal speed.
+const FALL_SPEED_INTRO := 20.0
+const INTRO_PIECES := 3
+# Difficulty scales the whole fall-speed curve (start, intro, per-concept step,
+# and cap) by one factor; "medium" is today's speed. Scoring follows via
+# _speed_factor, so harder = faster = more points.
+const DIFFICULTY_MULT := {"easy": 0.6, "medium": 1.0, "hard": 1.6}
+const SETTINGS_PATH := "user://settings.cfg"
 
-enum State { START, HOWTO, CREDITS, PLAYING, PAUSED, GAMEOVER, REVIEW, HIGHSCORES }
+enum State { START, HOWTO, CREDITS, DIFFICULTY, PLAYING, PAUSED, GAMEOVER, REVIEW, HIGHSCORES }
 
 # ----- game state -----
 var state: int = State.START
@@ -65,6 +75,17 @@ var lives := START_LIVES
 var _next_life_score := LIFE_FIRST     # next score threshold that grants a bonus life
 var concepts_completed := 0
 var current_fall_speed := FALL_SPEED_START
+var _pieces_spawned := 0     # per-round piece counter (for the slow intro pieces)
+var _difficulty := "medium"
+# Tutorial state (guided first two pieces).
+var _tutorial_this_round := false   # tutorial runs during this round
+var _tutorial_correct := 0          # correct drops so far (tutorial ends at 2)
+var _tutorial_hold := false         # falling frozen, waiting for the first input
+var _tutorial_line: Line2D
+var _tutorial_pulse: Polygon2D       # travelling dot along the connector
+var _tutorial_pulse_t := 0.0
+var _tutorial_box: PanelContainer
+var _tutorial_target_lane := -1
 
 var last_pair_key := ""
 var _bag: Array = []                # shuffle bag of pair keys
@@ -102,6 +123,7 @@ var go_submit_btn: Button
 var start_panel: Control
 var howto_panel: Control
 var credits_panel: Control
+var difficulty_panel: Control
 var pause_panel: Control
 var gameover_panel: Control
 var go_title: Label
@@ -114,6 +136,7 @@ func _ready() -> void:
 	var lang := I18n.load_pref()
 	TranslationServer.set_locale(lang)
 	PrototypeData.set_language(lang)
+	_difficulty = str(_get_setting("difficulty", "medium"))
 	_setup_fonts()
 	_setup_input()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -381,6 +404,21 @@ func _update_lang_icon() -> void:
 
 func _toggle_language() -> void:
 	_set_language("es" if I18n.lang == "en" else "en")
+
+# ----- persistent settings (shares user://settings.cfg with the language pref) -----
+func _get_setting(key: String, default):
+	var c := ConfigFile.new()
+	c.load(SETTINGS_PATH)
+	return c.get_value("game", key, default)
+
+func _set_setting(key: String, value) -> void:
+	var c := ConfigFile.new()
+	c.load(SETTINGS_PATH)
+	c.set_value("game", key, value)
+	c.save(SETTINGS_PATH)
+
+func _fall_mult() -> float:
+	return float(DIFFICULTY_MULT.get(_difficulty, 1.0))
 
 func _set_language(l: String) -> void:
 	if l == I18n.lang:
@@ -817,7 +855,7 @@ func _build_overlays() -> void:
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 18)
 	s.vb.add_child(spacer)
-	var start_btn := _make_button("START", start_round, true)
+	var start_btn := _make_button("START", _show_difficulty, true)
 	var howto_btn := _make_button("HOW TO PLAY", _show_howto, false)
 	var hs_btn := _make_button("HIGH SCORES", _show_highscores, false)
 	var credits_btn := _make_button("CREDITS", _show_credits, false)
@@ -966,14 +1004,42 @@ func _build_overlays() -> void:
 	c.vb.add_child(cbrow)
 	_default_focus[credits_panel] = cback
 
+	# Difficulty (second "start" menu, with a subtle falling background)
+	var dpanel := _make_overlay(true)
+	difficulty_panel = dpanel.root
+	_add_centered_label(dpanel.vb, "CHOOSE DIFFICULTY", 40, Palette.ACCENT)
+	_add_centered_label(dpanel.vb, "Speed only — Easy always shows the tutorial", 18, Palette.MUTED)
+	var dtop := Control.new()
+	dtop.custom_minimum_size = Vector2(0, 14)
+	dpanel.vb.add_child(dtop)
+	var diffs := [["easy", "EASY"], ["medium", "NORMAL"], ["hard", "HARD"]]
+	var first_diff_btn: Button = null
+	for d in diffs:
+		var key: String = d[0]
+		var btn := _make_button(d[1], func(): _start_with_difficulty(key), false)
+		if first_diff_btn == null:
+			first_diff_btn = btn
+		var brow := CenterContainer.new()
+		brow.add_child(btn)
+		dpanel.vb.add_child(brow)
+	var dspacer := Control.new()
+	dspacer.custom_minimum_size = Vector2(0, 16)
+	dpanel.vb.add_child(dspacer)
+	var dback := _make_button("BACK", _show_menu, false)
+	var dbrow := CenterContainer.new()
+	dbrow.add_child(dback)
+	dpanel.vb.add_child(dbrow)
+	_default_focus[difficulty_panel] = first_diff_btn
+
 	# Pause menu
 	var p := _make_overlay()
 	pause_panel = p.root
 	_add_centered_label(p.vb, "PAUSED", 44, Palette.TEXT)
 	var pause_resume := _make_button("RESUME", _toggle_pause)
+	var pause_restart := _make_button("RESTART", restart_round, false)
 	var pause_review := _make_button("CONCEPTS PLAYED", _show_review, false)
 	var pause_menu := _make_button("MAIN MENU", _show_menu, false)
-	var pause_btns := [pause_resume, pause_review, pause_menu]
+	var pause_btns := [pause_resume, pause_restart, pause_review, pause_menu]
 	if not OS.has_feature("web"):
 		pause_btns.append(_make_button("EXIT", _exit_game, false))
 	for btn in pause_btns:
@@ -1183,7 +1249,7 @@ func _hier_legend_text() -> String:
 	return "[color=#9AA7BD]%s[/color]\n" % tr("Card border color = concept hierarchy:") + "     ".join(parts)
 
 func _show_only(panel: Control) -> void:
-	for pnl in [start_panel, howto_panel, credits_panel, pause_panel, gameover_panel, review_panel, highscores_panel]:
+	for pnl in [start_panel, howto_panel, credits_panel, difficulty_panel, pause_panel, gameover_panel, review_panel, highscores_panel]:
 		if pnl:
 			pnl.visible = (pnl == panel)
 	if panel != null and not _input_guard and _default_focus.has(panel):
@@ -1194,6 +1260,7 @@ func _hide_overlays() -> void:
 	_show_only(null)
 
 func _show_menu() -> void:
+	_clear_tutorial()
 	state = State.START
 	_show_only(start_panel)
 
@@ -1204,6 +1271,15 @@ func _show_howto() -> void:
 func _show_credits() -> void:
 	state = State.CREDITS
 	_show_only(credits_panel)
+
+func _show_difficulty() -> void:
+	state = State.DIFFICULTY
+	_show_only(difficulty_panel)
+
+func _start_with_difficulty(d: String) -> void:
+	_difficulty = d
+	_set_setting("difficulty", d)
+	start_round()
 
 func _exit_game() -> void:
 	get_tree().quit()
@@ -1337,6 +1413,11 @@ func start_round() -> void:
 	_next_life_score = LIFE_FIRST
 	concepts_completed = 0
 	current_fall_speed = FALL_SPEED_START
+	_pieces_spawned = 0
+	# Tutorial: first time ever, or always on Easy.
+	_tutorial_this_round = _difficulty == "easy" or not bool(_get_setting("tutorial_seen", false))
+	_tutorial_correct = 0
+	_clear_tutorial()
 	last_pair_key = ""
 	_bag.clear()
 	_streak.clear()
@@ -1404,6 +1485,7 @@ func restart_round() -> void:
 	start_round()
 
 func end_game() -> void:
+	_clear_tutorial()
 	state = State.GAMEOVER
 	current_piece = null
 	sfx.sfx_game_over()
@@ -1562,7 +1644,10 @@ func spawn_next_piece() -> void:
 	piece_layer.add_child(piece)
 	piece.position = Vector2(_lane_center_x(1) - PIECE_W / 2.0, PIECE_START_Y)
 	current_piece = piece
+	_pieces_spawned += 1
 	input_locked = false
+	if _tutorial_this_round:
+		_begin_tutorial_step(piece)   # guide every piece until 2 correct drops
 
 # ----- input & falling -----
 func _process(delta: float) -> void:
@@ -1572,10 +1657,18 @@ func _process(delta: float) -> void:
 		_version_label.visible = state != State.PLAYING   # menus only, not while playing
 	if _lang_btn:
 		# switching is safe only in the static menus (no live piece bag to desync)
-		_lang_btn.visible = state == State.START or state == State.HOWTO or state == State.CREDITS
+		_lang_btn.visible = state == State.START or state == State.HOWTO or state == State.CREDITS or state == State.DIFFICULTY
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
-	var speed := current_fall_speed
+	if _tutorial_line != null:
+		_tutorial_pulse_t = fmod(_tutorial_pulse_t + delta / 0.9, 1.0)   # ~0.9s piece→card
+		_update_tutorial_line()   # keep the guide anchored to the moving piece
+	if _tutorial_hold:
+		return                    # frozen until the first input
+	var base := current_fall_speed
+	if _pieces_spawned <= INTRO_PIECES or _tutorial_this_round:
+		base = minf(base, FALL_SPEED_INTRO)   # slow for onboarding / while the tutorial guides
+	var speed := base * _fall_mult()          # difficulty scales the whole curve
 	if Input.is_action_pressed("af_soft"):
 		speed = maxf(speed, FALL_SPEED_SOFT)
 	current_piece.position.y += speed * delta
@@ -1585,13 +1678,15 @@ func _process(delta: float) -> void:
 		resolve_drop(current_piece.lane_index)
 
 # Runs before the GUI, so it sees button clicks too. On the first user gesture,
-# (re)start the active music so browsers unlock audio and it plays immediately.
+# start the active music ONLY if it isn't already playing, so browsers unlock
+# audio without restarting a track that's already going (the web AudioContext is
+# resumed separately by web/shell.html).
 func _input(event: InputEvent) -> void:
 	if _audio_kicked:
 		return
 	if event.is_pressed():
 		_audio_kicked = true
-		if not _mplayers.is_empty() and not _music_locked:
+		if not _mplayers.is_empty() and not _music_locked and not _mplayers[_mactive].playing:
 			_mplayers[_mactive].play()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1609,7 +1704,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		State.CREDITS:
 			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
 				_show_menu()
+		State.DIFFICULTY:
+			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
+				_show_menu()
 		State.PLAYING:
+			if _tutorial_hold and (event.is_action_pressed("af_left") or event.is_action_pressed("af_right") \
+					or event.is_action_pressed("af_soft") or event.is_action_pressed("af_hard")):
+				_end_tutorial_hold()   # a real move/drop resumes the fall; the action still applies
 			if event.is_action_pressed("af_left"):
 				move_piece_left()
 			elif event.is_action_pressed("af_right"):
@@ -1631,9 +1732,13 @@ func _unhandled_input(event: InputEvent) -> void:
 func _toggle_pause() -> void:
 	if state == State.PLAYING:
 		state = State.PAUSED
+		if _tutorial_box:
+			_tutorial_box.visible = false   # don't let the tutorial prompt sit over the pause menu
 		_show_only(pause_panel)
 	elif state == State.PAUSED:
 		state = State.PLAYING
+		if _tutorial_hold and _tutorial_box:
+			_tutorial_box.visible = true    # still mid-tutorial → restore the prompt
 		_hide_overlays()
 		get_viewport().gui_release_focus()
 
@@ -1672,6 +1777,8 @@ func hard_drop() -> void:
 func _on_card_clicked(lane: int) -> void:
 	if state != State.PLAYING or _counting or input_locked or current_piece == null:
 		return
+	if _tutorial_hold:
+		_end_tutorial_hold()   # first click also resumes the tutorial hold
 	if current_piece.lane_index == lane:
 		hard_drop()
 		return
@@ -1694,6 +1801,10 @@ func resolve_drop(lane: int) -> void:
 	var piece := current_piece
 	current_piece = null
 
+	var was_tutorial := _tutorial_this_round
+	if was_tutorial:
+		_clear_tutorial()   # the guide line disappears when the piece lands
+
 	var concept = active_concepts[lane]
 	var correct := false
 	if concept != null:
@@ -1701,6 +1812,8 @@ func resolve_drop(lane: int) -> void:
 		if idx >= 0:
 			concept.relationships[idx].completed = true
 			correct = true
+	if was_tutorial and correct:
+		_tutorial_correct += 1
 
 	if correct:
 		combo = mini(combo + 1, MAX_COMBO)
@@ -1724,11 +1837,13 @@ func resolve_drop(lane: int) -> void:
 		else:
 			await _delay(0.12)
 	else:
-		lives -= 1
+		if not was_tutorial:   # mistakes are free during the guided tutorial
+			lives -= 1
 		combo = 0
 		_update_hud()
 		lane_cards[lane].flash_wrong()
-		_show_message(tr("Not part of this concept"), Palette.INCORRECT)
+		if not was_tutorial:
+			_show_message(tr("Not part of this concept"), Palette.INCORRECT)
 		_highlight_valid_targets(piece)
 		_crt_error_burst()
 		sfx.sfx_wrong()
@@ -1738,6 +1853,20 @@ func resolve_drop(lane: int) -> void:
 			end_game()
 			return
 		await _delay(0.5)
+
+	# Encouraging feedback during the guided tutorial.
+	if was_tutorial:
+		if not correct:
+			_show_message(tr("Not quite — the right card is highlighted"), Palette.INCORRECT, 2.2)
+		elif _tutorial_correct < 2:
+			_show_message(tr("Nice — that's how it works!"), Palette.CORRECT)   # first correct
+
+	# End the tutorial after two correct drops (mistakes keep guiding, cost nothing).
+	if was_tutorial and _tutorial_correct >= 2:
+		_tutorial_this_round = false
+		_set_setting("tutorial_seen", true)
+		_show_message(tr("Good! Now it's your turn…"), Palette.ACCENT, 2.0)   # immediate, alongside the score popups
+		await _delay(0.6)
 
 	if state == State.PLAYING:
 		spawn_next_piece()
@@ -1788,7 +1917,7 @@ func _increase_speed() -> void:
 
 # Grows from 1.0 as the fall speed rises; makes scores vary and not stay round.
 func _speed_factor() -> float:
-	return current_fall_speed / FALL_SPEED_START
+	return current_fall_speed * _fall_mult() / FALL_SPEED_START
 
 func _highlight_valid_targets(piece: RelationshipPiece) -> void:
 	for i in LANE_COUNT:
@@ -1876,6 +2005,147 @@ func _extra_life_popup() -> void:
 	t.tween_property(l, "position:y", l.position.y - 30.0, 0.5)
 	t.chain().tween_callback(l.queue_free)
 
+# ----- guided tutorial (first two pieces) -----
+# Which lane the guide points to for a piece (a concept it validly belongs to).
+func _first_valid_lane(piece: RelationshipPiece) -> int:
+	for i in active_concepts.size():
+		var c = active_concepts[i]
+		if c != null and _find_unresolved_match(c, piece.attribute, piece.value) >= 0:
+			return i
+	return -1
+
+# Let the piece fall a moment (so the motion is visible), then freeze it and draw
+# the guide to a valid target concept.
+func _begin_tutorial_step(piece: RelationshipPiece) -> void:
+	await _delay(0.7)
+	if state != State.PLAYING or current_piece != piece:
+		return
+	var lane := _first_valid_lane(piece)
+	if lane < 0:
+		return
+	_tutorial_target_lane = lane
+	_tutorial_hold = true
+	lane_cards[lane].set_tutorial_glow(true)
+	_draw_tutorial_line()
+	var cname := str(active_concepts[lane].label) if active_concepts[lane] != null else ""
+	_show_tutorial_box(cname)
+
+func _end_tutorial_hold() -> void:
+	_tutorial_hold = false
+	if _tutorial_box:
+		_tutorial_box.visible = false   # hide the prompt; the line stays until landing
+
+func _clear_tutorial() -> void:
+	_tutorial_hold = false
+	if _tutorial_target_lane >= 0 and _tutorial_target_lane < lane_cards.size():
+		lane_cards[_tutorial_target_lane].set_tutorial_glow(false)
+	_tutorial_target_lane = -1
+	if _tutorial_line:
+		_tutorial_line.queue_free()
+		_tutorial_line = null
+	if _tutorial_pulse:
+		_tutorial_pulse.queue_free()
+		_tutorial_pulse = null
+	if _tutorial_box:
+		_tutorial_box.queue_free()
+		_tutorial_box = null
+
+func _draw_tutorial_line() -> void:
+	if _tutorial_line == null:
+		_tutorial_line = Line2D.new()
+		_tutorial_line.width = 3.0
+		_tutorial_line.default_color = Color(Palette.ACCENT.r, Palette.ACCENT.g, Palette.ACCENT.b, 0.9)
+		# No z_index bump: stay within piece_layer so menu overlays (pause) draw
+		# over and dim the line like everything else.
+		piece_layer.add_child(_tutorial_line)
+	if _tutorial_pulse == null:
+		_tutorial_pulse = Polygon2D.new()
+		_tutorial_pulse.polygon = _circle_points(6.0, 16)
+		_tutorial_pulse.color = Color(Palette.ACCENT.r, Palette.ACCENT.g, Palette.ACCENT.b, 1.0)
+		piece_layer.add_child(_tutorial_pulse)
+		_tutorial_pulse_t = 0.0
+	_update_tutorial_line()
+
+func _circle_points(r: float, n: int) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for i in n:
+		var a := TAU * float(i) / float(n)
+		pts.append(Vector2(cos(a), sin(a)) * r)
+	return pts
+
+# Position along the elbow polyline at normalized t (0 = piece, 1 = card).
+func _point_along(pts: PackedVector2Array, t: float) -> Vector2:
+	if pts.size() < 2:
+		return pts[0] if pts.size() == 1 else Vector2.ZERO
+	var seglens: PackedFloat32Array = []
+	var total := 0.0
+	for i in pts.size() - 1:
+		var l := pts[i].distance_to(pts[i + 1])
+		seglens.append(l)
+		total += l
+	if total <= 0.0:
+		return pts[0]
+	var d := clampf(t, 0.0, 1.0) * total
+	for i in pts.size() - 1:
+		var sl := seglens[i]
+		if d <= sl or i == pts.size() - 2:
+			var f: float = 0.0 if sl == 0.0 else d / sl
+			return pts[i].lerp(pts[i + 1], clampf(f, 0.0, 1.0))
+		d -= sl
+	return pts[pts.size() - 1]
+
+# Right-angle "elbow" connector from the piece's bottom to the target card's top.
+func _update_tutorial_line() -> void:
+	if _tutorial_line == null or current_piece == null or _tutorial_target_lane < 0:
+		return
+	var start := Vector2(current_piece.position.x + PIECE_W / 2.0, current_piece.position.y + current_piece.size.y)
+	var endp := Vector2(_lane_center_x(_tutorial_target_lane), lane_cards[_tutorial_target_lane].get_top_y())
+	var mid_y := (start.y + endp.y) / 2.0
+	var pts := PackedVector2Array([start, Vector2(start.x, mid_y), Vector2(endp.x, mid_y), endp])
+	_tutorial_line.points = pts
+	if _tutorial_pulse:
+		var t := _tutorial_pulse_t
+		_tutorial_pulse.position = _point_along(pts, t)
+		# fade in as it leaves the piece, out as it reaches the card
+		var a := 1.0
+		if t < 0.15:
+			a = t / 0.15
+		elif t > 0.85:
+			a = (1.0 - t) / 0.15
+		_tutorial_pulse.modulate.a = clampf(a, 0.0, 1.0)
+
+func _show_tutorial_box(concept_name: String) -> void:
+	if _tutorial_box:
+		_tutorial_box.queue_free()
+	_tutorial_box = PanelContainer.new()
+	_tutorial_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tutorial_box.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.043, 0.063, 0.125, 0.94)
+	st.set_border_width_all(1)
+	st.border_color = Palette.ACCENT
+	st.set_corner_radius_all(10)
+	st.content_margin_left = 18
+	st.content_margin_right = 18
+	st.content_margin_top = 10
+	st.content_margin_bottom = 10
+	_tutorial_box.add_theme_stylebox_override("panel", st)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 3)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tutorial_box.add_child(vb)
+	var l1 := _make_label(tr("This attribute is part of the '%s' definition") % concept_name, 18, Palette.TEXT)
+	l1.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l1.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(l1)
+	var l2 := _make_label(tr("Move it over the card and drop — or click the card"), 14, Palette.MUTED)
+	l2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.add_child(l2)
+	add_child(_tutorial_box)
+	_tutorial_box.reset_size()
+	_tutorial_box.position = Vector2(SCREEN.x / 2.0 - _tutorial_box.size.x / 2.0, 20.0)
+
 func _combo_popup(lane: int, n: int) -> void:
 	var l := _make_label("COMBO ×%d" % n, 22, _combo_color(n))
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1895,12 +2165,12 @@ func _combo_popup(lane: int, n: int) -> void:
 	t.tween_property(l, "modulate:a", 0.0, 1.4).set_ease(Tween.EASE_IN)
 	t.chain().tween_callback(l.queue_free)
 
-func _show_message(text: String, color: Color = Palette.TEXT) -> void:
+func _show_message(text: String, color: Color = Palette.TEXT, hold: float = 0.55) -> void:
 	message_label.text = text
 	message_label.add_theme_color_override("font_color", color)
 	message_label.modulate.a = 1.0
 	var t := create_tween()
-	t.tween_interval(0.55)
+	t.tween_interval(hold)
 	t.tween_property(message_label, "modulate:a", 0.0, 0.4)
 
 func _delay(t: float) -> void:

@@ -28,6 +28,18 @@ const ES := {
 	# Main menu
 	"Drop each SNOMED relationship onto the concept it defines.": "Soltá cada relación SNOMED sobre el concepto que define.",
 	"START": "EMPEZAR",
+	# Difficulty
+	"CHOOSE DIFFICULTY": "ELEGÍ LA DIFICULTAD",
+	"Speed only — Easy always shows the tutorial": "Solo velocidad — Fácil siempre muestra el tutorial",
+	"EASY": "FÁCIL",
+	"NORMAL": "NORMAL",
+	"HARD": "DIFÍCIL",
+	# Tutorial overlay
+	"This attribute is part of the '%s' definition": "Este atributo es parte de la definición de '%s'",
+	"Move it over the card and drop — or click the card": "Llevala sobre la tarjeta y soltala — o hacé clic en la tarjeta",
+	"Nice — that's how it works!": "¡Muy bien! Así se juega.",
+	"Not quite — the right card is highlighted": "Casi — la tarjeta correcta está resaltada",
+	"Good! Now it's your turn…": "¡Bien! Ahora te toca a vos…",
 	"HOW TO PLAY": "CÓMO JUGAR",
 	"HIGH SCORES": "MEJORES PUNTAJES",
 	"CREDITS": "CRÉDITOS",
@@ -63,6 +75,7 @@ const ES := {
 	# Pause
 	"PAUSED": "PAUSA",
 	"RESUME": "CONTINUAR",
+	"RESTART": "REINICIAR",
 	"CONCEPTS PLAYED": "CONCEPTOS JUGADOS",
 	"MAIN MENU": "MENÚ PRINCIPAL",
 	# Game over

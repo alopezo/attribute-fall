@@ -197,6 +197,23 @@ func refresh() -> void:
 func _set_border(c: Color) -> void:
 	_style.border_color = c
 
+# Pulsing accent glow (tutorial "shine" on the target card). Uses the panel
+# shadow so it never fights the border flash animations.
+var _glow_tween: Tween
+func set_tutorial_glow(on: bool) -> void:
+	_ensure_built()
+	if _glow_tween and _glow_tween.is_valid():
+		_glow_tween.kill()
+	_glow_tween = null
+	if not on:
+		_style.shadow_size = 0
+		return
+	_style.shadow_color = Color(Palette.ACCENT.r, Palette.ACCENT.g, Palette.ACCENT.b, 0.6)
+	_glow_tween = create_tween()
+	_glow_tween.set_loops()
+	_glow_tween.tween_method(func(s): _style.shadow_size = int(s), 3.0, 16.0, 0.65).set_trans(Tween.TRANS_SINE)
+	_glow_tween.tween_method(func(s): _style.shadow_size = int(s), 16.0, 3.0, 0.65).set_trans(Tween.TRANS_SINE)
+
 func flash_correct() -> void:
 	_set_border(Palette.CORRECT)
 	var t := create_tween()
