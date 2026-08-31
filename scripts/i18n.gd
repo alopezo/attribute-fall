@@ -34,6 +34,14 @@ const ES := {
 	"EASY": "FÁCIL",
 	"NORMAL": "NORMAL",
 	"HARD": "DIFÍCIL",
+	# Theme / topic filter
+	"CHOOSE TOPIC": "ELEGÍ EL TEMA",
+	"Topic: %s": "Tema: %s",
+	"All hierarchies": "Todas las jerarquías",
+	"Clinical findings": "Hallazgos clínicos",
+	"Procedures": "Procedimientos",
+	"Products": "Fármacos",
+	"Situations": "Situaciones",
 	# Tutorial overlay
 	"This attribute is part of the '%s' definition": "Este atributo es parte de la definición de '%s'",
 	"Move it over the card and drop — or click the card": "Llevala sobre la tarjeta y soltala — o hacé clic en la tarjeta",

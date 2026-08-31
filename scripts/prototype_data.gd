@@ -24,6 +24,21 @@ static func set_language(lang: String) -> void:
 static func _data_path() -> String:
 	return DATA_PATH_ES if _lang == "es" else DATA_PATH_EN
 
+# Theme filter: "all" or a hierarchy key ("finding"/"procedure"/"product"/
+# "situation"). Applied on the next reset_pool().
+static var _theme := "all"
+static func set_theme(t: String) -> void:
+	_theme = t
+
+static func _pool_indices() -> Array:
+	var idx: Array = []
+	for i in _all.size():
+		if _theme == "all" or String(_all[i].get("hier", "")) == _theme:
+			idx.append(i)
+	if idx.is_empty():          # safety: unknown/empty theme -> whole pool
+		idx = range(_all.size())
+	return idx
+
 # Minimal fallback so the game still runs if the JSON is missing.
 const FALLBACK := [
 	{"id": "f1", "label": "Pneumonia", "relationships": [
@@ -74,7 +89,7 @@ static func concept_count() -> int:
 # Start a fresh shuffled walk over the whole pool.
 static func reset_pool() -> void:
 	_load()
-	_order = range(_all.size())
+	_order = _pool_indices()
 	_order.shuffle()
 	_cursor = 0
 

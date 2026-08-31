@@ -53,8 +53,16 @@ const INTRO_PIECES := 3
 # _speed_factor, so harder = faster = more points.
 const DIFFICULTY_MULT := {"easy": 0.6, "medium": 1.0, "hard": 1.6}
 const SETTINGS_PATH := "user://settings.cfg"
+# Theme filter keys -> display label (translated at use). "all" = whole pool.
+const THEME_NAMES := {
+	"all": "All hierarchies",
+	"finding": "Clinical findings",
+	"procedure": "Procedures",
+	"product": "Products",
+	"situation": "Situations",
+}
 
-enum State { START, HOWTO, CREDITS, DIFFICULTY, PLAYING, PAUSED, GAMEOVER, REVIEW, HIGHSCORES }
+enum State { START, HOWTO, CREDITS, DIFFICULTY, THEME, PLAYING, PAUSED, GAMEOVER, REVIEW, HIGHSCORES }
 
 # ----- game state -----
 var state: int = State.START
@@ -77,6 +85,8 @@ var concepts_completed := 0
 var current_fall_speed := FALL_SPEED_START
 var _pieces_spawned := 0     # per-round piece counter (for the slow intro pieces)
 var _difficulty := "medium"
+var _theme := "all"
+var _theme_btn: Button
 # Tutorial state (guided first two pieces).
 var _tutorial_this_round := false   # tutorial runs during this round
 var _tutorial_correct := 0          # correct drops so far (tutorial ends at 2)
@@ -124,6 +134,7 @@ var start_panel: Control
 var howto_panel: Control
 var credits_panel: Control
 var difficulty_panel: Control
+var theme_panel: Control
 var pause_panel: Control
 var gameover_panel: Control
 var go_title: Label
@@ -137,6 +148,8 @@ func _ready() -> void:
 	TranslationServer.set_locale(lang)
 	PrototypeData.set_language(lang)
 	_difficulty = str(_get_setting("difficulty", "medium"))
+	_theme = str(_get_setting("theme", "all"))
+	PrototypeData.set_theme(_theme)
 	_setup_fonts()
 	_setup_input()
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -446,6 +459,7 @@ func _retranslate() -> void:
 		_fill_demo()
 	if _music_btn:
 		_music_btn.tooltip_text = tr("Music on/off (M)")
+	_update_theme_btn()
 
 # SNOMED International badge, pinned bottom-right, above everything.
 func _build_logo() -> void:
@@ -1025,11 +1039,44 @@ func _build_overlays() -> void:
 	var dspacer := Control.new()
 	dspacer.custom_minimum_size = Vector2(0, 16)
 	dpanel.vb.add_child(dspacer)
+	# Topic filter (opens a sub-menu; default "All" so it costs no extra step).
+	_theme_btn = _make_button("", _show_theme, false)
+	_theme_btn.auto_translate_mode = Control.AUTO_TRANSLATE_MODE_DISABLED
+	_update_theme_btn()
+	var trow := CenterContainer.new()
+	trow.add_child(_theme_btn)
+	dpanel.vb.add_child(trow)
 	var dback := _make_button("BACK", _show_menu, false)
 	var dbrow := CenterContainer.new()
 	dbrow.add_child(dback)
 	dpanel.vb.add_child(dbrow)
 	_default_focus[difficulty_panel] = first_diff_btn
+
+	# Topic / theme sub-menu (reached from the difficulty screen)
+	var tp := _make_overlay(true)
+	theme_panel = tp.root
+	_add_centered_label(tp.vb, "CHOOSE TOPIC", 40, Palette.ACCENT)
+	var tspacer := Control.new()
+	tspacer.custom_minimum_size = Vector2(0, 10)
+	tp.vb.add_child(tspacer)
+	var themes := ["all", "finding", "procedure", "product", "situation"]
+	var first_theme_btn: Button = null
+	for key in themes:
+		var tkey: String = key
+		var tbtn := _make_button(THEME_NAMES[tkey], func(): _select_theme(tkey), false)
+		if first_theme_btn == null:
+			first_theme_btn = tbtn
+		var row := CenterContainer.new()
+		row.add_child(tbtn)
+		tp.vb.add_child(row)
+	var tspacer2 := Control.new()
+	tspacer2.custom_minimum_size = Vector2(0, 12)
+	tp.vb.add_child(tspacer2)
+	var tback := _make_button("BACK", _show_difficulty, false)
+	var tbrow := CenterContainer.new()
+	tbrow.add_child(tback)
+	tp.vb.add_child(tbrow)
+	_default_focus[theme_panel] = first_theme_btn
 
 	# Pause menu
 	var p := _make_overlay()
@@ -1249,7 +1296,7 @@ func _hier_legend_text() -> String:
 	return "[color=#9AA7BD]%s[/color]\n" % tr("Card border color = concept hierarchy:") + "     ".join(parts)
 
 func _show_only(panel: Control) -> void:
-	for pnl in [start_panel, howto_panel, credits_panel, difficulty_panel, pause_panel, gameover_panel, review_panel, highscores_panel]:
+	for pnl in [start_panel, howto_panel, credits_panel, difficulty_panel, theme_panel, pause_panel, gameover_panel, review_panel, highscores_panel]:
 		if pnl:
 			pnl.visible = (pnl == panel)
 	if panel != null and not _input_guard and _default_focus.has(panel):
@@ -1280,6 +1327,22 @@ func _start_with_difficulty(d: String) -> void:
 	_difficulty = d
 	_set_setting("difficulty", d)
 	start_round()
+
+func _show_theme() -> void:
+	state = State.THEME
+	_show_only(theme_panel)
+
+func _select_theme(t: String) -> void:
+	_theme = t
+	_set_setting("theme", t)
+	PrototypeData.set_theme(t)
+	_update_theme_btn()
+	_show_difficulty()
+
+func _update_theme_btn() -> void:
+	if _theme_btn:
+		var name_key: String = THEME_NAMES.get(_theme, THEME_NAMES["all"])
+		_theme_btn.text = tr("Topic: %s") % tr(name_key)
 
 func _exit_game() -> void:
 	get_tree().quit()
@@ -1430,6 +1493,7 @@ func start_round() -> void:
 
 	# Infinite mode: fill the 4 lanes from an endless, reshuffling pool.
 	played_concepts.clear()
+	PrototypeData.set_theme(_theme)
 	PrototypeData.reset_pool()
 	for i in LANE_COUNT:
 		active_concepts[i] = PrototypeData.next_runtime_concept()
@@ -1657,7 +1721,7 @@ func _process(delta: float) -> void:
 		_version_label.visible = state != State.PLAYING   # menus only, not while playing
 	if _lang_btn:
 		# switching is safe only in the static menus (no live piece bag to desync)
-		_lang_btn.visible = state == State.START or state == State.HOWTO or state == State.CREDITS or state == State.DIFFICULTY
+		_lang_btn.visible = state == State.START or state == State.HOWTO or state == State.CREDITS or state == State.DIFFICULTY or state == State.THEME
 	if state != State.PLAYING or current_piece == null or input_locked:
 		return
 	if _tutorial_line != null:
@@ -1707,6 +1771,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		State.DIFFICULTY:
 			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
 				_show_menu()
+		State.THEME:
+			if event.is_action_pressed("ui_cancel") or event.is_action_pressed("af_pause"):
+				_show_difficulty()
 		State.PLAYING:
 			if _tutorial_hold and (event.is_action_pressed("af_left") or event.is_action_pressed("af_right") \
 					or event.is_action_pressed("af_soft") or event.is_action_pressed("af_hard")):
